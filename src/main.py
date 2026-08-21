@@ -1,26 +1,24 @@
+import Setup
+import Extraction_config_Module
+
 from label_store import (
     init_store,
     extract_frames_for_video,
     init_labeling_config,
-    ExtractionConfig,
-    save_extraction_config,
     list_extractions,
 )
 
-STORE = r"C:\Users\Egor\Documents\GitHub\DLC data managenet\data\frames_store"
-VIDEO = r"C:\Users\Egor\Documents\GitHub\DLC data managenet\data\raw_videos\HDMI-A.mp4"
-
-store_path = init_store(STORE, numframes2pick=50)  # seeds extraction_configs/default.yaml
+store_path = init_store(Setup.STORE, numframes2pick=50)  # seeds extraction_configs/default.yaml
 
 # Extract with the default preset -> labeled-data/HDMI-A__default/...
-extract_frames_for_video(store_path, VIDEO, config_name="default")
+extract_frames_for_video(store_path, Setup.VIDEO, config_name="default")
 
 # --- Duplicate extraction, same video, different preset -----------------
 # Because both video AND config are named explicitly, this lands in its own
 # folder (HDMI-A__dense) instead of overwriting the run above.
 #
-save_extraction_config(store_path, ExtractionConfig(name="dense", numframes2pick=150, algo="uniform"))
-extract_frames_for_video(store_path, VIDEO, config_name="dense")
+Extraction_config_Module.save_extraction_config(store_path, Extraction_config_Module.ExtractionConfig(name="dense", numframes2pick=150, algo="uniform"))
+extract_frames_for_video(store_path, Setup.VIDEO, config_name="dense")
 
 print(list_extractions(store_path))
 

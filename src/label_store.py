@@ -77,9 +77,6 @@ Usage
     # DLC can't tell this apart from a normal project config.
 """
 
-import matplotlib
-matplotlib.use("Agg")  # must come before importing deeplabcut, matches your existing scripts
-
 import yaml
 from dataclasses import dataclass, asdict, field
 from datetime import date as _date, datetime
@@ -88,72 +85,7 @@ from pathlib import Path
 import deeplabcut
 from deeplabcut.utils import auxiliaryfunctions
 
-
-# ────────────────────────────────────────────────────────────────────────
-# Extraction config: versioned, named presets
-# ────────────────────────────────────────────────────────────────────────
-
-@dataclass
-class ExtractionConfig:
-    """Exactly the arguments deeplabcut.extract_frames() (automatic mode)
-    consumes — nothing about bodyparts/scorer/skeleton lives here."""
-    name: str = "default"
-    algo: str = "kmeans"
-    mode: str = "automatic"
-    userfeedback: bool = False
-    numframes2pick: int = 20
-    start: float = 0.0
-    stop: float = 1.0
-    engine: str = "pytorch"
-
-    def to_dict(self):
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, d):
-        known = {f for f in cls.__dataclass_fields__}
-        return cls(**{k: v for k, v in d.items() if k in known})
-
-
-def _extraction_configs_dir(store_path):
-    return Path(store_path).resolve() / "extraction_configs"
-
-
-def save_extraction_config(store_path, cfg: ExtractionConfig, overwrite=False):
-    """Persist an ExtractionConfig preset as extraction_configs/<name>.yaml."""
-    cfg_dir = _extraction_configs_dir(store_path)
-    cfg_dir.mkdir(parents=True, exist_ok=True)
-    path = cfg_dir / f"{cfg.name}.yaml"
-    if path.exists() and not overwrite:
-        raise FileExistsError(
-            f"Extraction config '{cfg.name}' already exists at {path}. "
-            f"Pass overwrite=True to replace it."
-        )
-    with open(path, "w") as f:
-        yaml.safe_dump(cfg.to_dict(), f, sort_keys=False)
-    print(f"✅ Extraction config saved: {path}")
-    return path
-
-
-def load_extraction_config(store_path, name="default") -> ExtractionConfig:
-    path = _extraction_configs_dir(store_path) / f"{name}.yaml"
-    if not path.exists():
-        available = list_extraction_configs(store_path)
-        raise FileNotFoundError(
-            f"No extraction config named '{name}' in {path.parent}. "
-            f"Available: {available or '(none)'}"
-        )
-    with open(path) as f:
-        d = yaml.safe_load(f) or {}
-    d.setdefault("name", name)
-    return ExtractionConfig.from_dict(d)
-
-
-def list_extraction_configs(store_path):
-    cfg_dir = _extraction_configs_dir(store_path)
-    if not cfg_dir.is_dir():
-        return []
-    return sorted(p.stem for p in cfg_dir.glob("*.yaml"))
+import Extraction_config_Module
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -230,9 +162,9 @@ def init_store(store_path, **default_extraction_overrides):
     if not _manifest_path(store_path).exists():
         _save_manifest(store_path, {"extractions": {}})
 
-    default_path = _extraction_configs_dir(store_path) / "default.yaml"
+    default_path = Extraction_config_Module._extraction_configs_dir(store_path) / "default.yaml"
     if not default_path.exists():
-        save_extraction_config(store_path, ExtractionConfig(name="default", **default_extraction_overrides))
+        Extraction_config_Module.save_extraction_config(store_path, Extraction_config_Module.ExtractionConfig(name="default", **default_extraction_overrides))
         print(f"✅ Store initialized: {store_path}")
     else:
         print(f"⏭  Store already initialized: {store_path}")
@@ -292,7 +224,7 @@ def extract_frames_for_video(store_path, video_path, config_name="default", over
     if not Path(video_path).is_file():
         raise FileNotFoundError(f"Video not found: {video_path}")
 
-    ex_cfg = load_extraction_config(store_path, config_name)
+    ex_cfg = Extraction_config_Module.load_extraction_config(store_path, config_name)
     video_stem = Path(video_path).stem
     folder_id = folder_id_for(video_path, ex_cfg.name)
     project_dir = store_path / "labeled-data" / folder_id
