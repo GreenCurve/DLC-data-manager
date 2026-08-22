@@ -1,11 +1,11 @@
 import Setup
 import Extraction_config_Module
+import Manifest_Module
 
 from label_store import (
     init_store,
     extract_frames_for_video,
     init_labeling_config,
-    list_extractions,
 )
 
 store_path = init_store(Setup.STORE, numframes2pick=50)  # seeds extraction_configs/default.yaml
@@ -20,7 +20,7 @@ extract_frames_for_video(store_path, Setup.VIDEO, config_name="default")
 Extraction_config_Module.save_extraction_config(store_path, Extraction_config_Module.ExtractionConfig(name="dense", numframes2pick=150, algo="uniform"))
 extract_frames_for_video(store_path, Setup.VIDEO, config_name="dense")
 
-print(list_extractions(store_path))
+print(Manifest_Module.list_extractions(store_path))
 
 # --- Once you're ready to label a SPECIFIC frame set ---------------------
 # (not needed just to extract frames above; bodyparts can differ per folder)

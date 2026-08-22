@@ -86,58 +86,8 @@ import deeplabcut
 from deeplabcut.utils import auxiliaryfunctions
 
 import Extraction_config_Module
+import Manifest_Module
 
-
-# ────────────────────────────────────────────────────────────────────────
-# Manifest: which raw video + which extraction config produced which frames
-# ────────────────────────────────────────────────────────────────────────
-
-def _manifest_path(store_path):
-    return Path(store_path).resolve() / "manifest.yaml"
-
-
-def _load_manifest(store_path):
-    path = _manifest_path(store_path)
-    if not path.exists():
-        return {"extractions": {}}
-    with open(path) as f:
-        return yaml.safe_load(f) or {"extractions": {}}
-
-
-def _save_manifest(store_path, manifest):
-    with open(_manifest_path(store_path), "w") as f:
-        yaml.safe_dump(manifest, f, sort_keys=False)
-
-
-def list_extractions(store_path):
-    """All recorded frame sets: folder_id -> {video_path, config_name, ...}."""
-    return _load_manifest(store_path).get("extractions", {})
-
-
-def get_extraction(store_path, folder_id):
-    record = list_extractions(store_path).get(folder_id)
-    if record is None:
-        raise KeyError(
-            f"No extraction recorded for '{folder_id}'. "
-            f"Known: {list(list_extractions(store_path))}"
-        )
-    return record
-
-
-def _record_extraction(store_path, folder_id, video_path, video_stem, ex_cfg, frames_dir, project_config_path):
-    manifest = _load_manifest(store_path)
-    extractions = manifest.setdefault("extractions", {})
-    frame_count = sum(1 for p in frames_dir.iterdir() if p.suffix == ".png")
-    extractions[folder_id] = {
-        "video_path": video_path,
-        "video_stem": video_stem,
-        "config_name": ex_cfg.name,
-        "config": ex_cfg.to_dict(),
-        "frame_count": frame_count,
-        "project_config": str(project_config_path),
-        "updated_at": datetime.now().isoformat(timespec="seconds"),
-    }
-    _save_manifest(store_path, manifest)
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -159,8 +109,8 @@ def init_store(store_path, **default_extraction_overrides):
     (store_path / "labeled-data").mkdir(parents=True, exist_ok=True)
     (store_path / "extraction_configs").mkdir(parents=True, exist_ok=True)
 
-    if not _manifest_path(store_path).exists():
-        _save_manifest(store_path, {"extractions": {}})
+    if not Manifest_Module._manifest_path(store_path).exists():
+        Manifest_Module._save_manifest(store_path, {"extractions": {}})
 
     default_path = Extraction_config_Module._extraction_configs_dir(store_path) / "default.yaml"
     if not default_path.exists():
@@ -234,7 +184,7 @@ def extract_frames_for_video(store_path, video_path, config_name="default", over
     already_extracted = frames_dir.is_dir() and any(p.suffix == ".png" for p in frames_dir.iterdir())
     if already_extracted and not overwrite:
         print(f"⏭  Already extracted: {folder_id}")
-        _record_extraction(store_path, folder_id, video_path, video_stem, ex_cfg, frames_dir, project_config_path)
+        Manifest_Module._record_extraction(store_path, folder_id, video_path, video_stem, ex_cfg, frames_dir, project_config_path)
         return project_config_path
 
     crop_entry = _video_crop_entry(video_path)
@@ -260,7 +210,7 @@ def extract_frames_for_video(store_path, video_path, config_name="default", over
     if not frames_dir.is_dir():
         raise RuntimeError(f"DLC did not produce the expected frames dir: {frames_dir}")
 
-    _record_extraction(store_path, folder_id, video_path, video_stem, ex_cfg, frames_dir, project_config_path)
+    Manifest_Module._record_extraction(store_path, folder_id, video_path, video_stem, ex_cfg, frames_dir, project_config_path)
     frame_count = sum(1 for p in frames_dir.iterdir() if p.suffix == ".png")
     print(f"🎞  Extracted {frame_count} frames → labeled-data/{folder_id}/labeled-data/{video_stem}")
     return project_config_path

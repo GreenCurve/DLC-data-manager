@@ -30,13 +30,13 @@ import pytest
 
 import Setup
 import Extraction_config_Module
+import Manifest_Module
 from label_store import (
     init_store,
     extract_frames_for_video,
     init_labeling_config,
-    list_extractions,
-    get_extraction,
 )
+
 
 
 EXPECTED_DEFAULT_FRAMES = 50
@@ -144,7 +144,7 @@ def test_duplicate_extraction_did_not_touch_the_original(executed_store):
 # ────────────────────────────────────────────────────────────────────────
 
 def test_manifest_has_both_entries(executed_store):
-    manifest = list_extractions(executed_store)
+    manifest = Manifest_Module.list_extractions(executed_store)
     assert set(manifest.keys()) == {DEFAULT_ID, DENSE_ID}
 
 
@@ -156,7 +156,7 @@ def test_manifest_has_both_entries(executed_store):
     ],
 )
 def test_manifest_record_fields(executed_store, folder_id, config_name, algo, frame_count):
-    record = get_extraction(executed_store, folder_id)
+    record = Manifest_Module.get_extraction(executed_store, folder_id)
     assert record["config_name"] == config_name
     assert record["config"]["algo"] == algo
     assert record["frame_count"] == frame_count
