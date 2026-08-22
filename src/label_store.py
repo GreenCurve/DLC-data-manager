@@ -31,15 +31,17 @@ Design (v2)
    name wherever you extract. Keep as many presets as you want
    (default.yaml, dense.yaml, uniform_pass.yaml, ...).
 
-3) The store supports duplicates on purpose. You explicitly pick a video AND
-   a named extraction config every time you extract; the resulting frame
-   folder is named "<video_stem>__<config_name>" so re-extracting the same
-   video with a different config never collides with or overwrites an
-   existing frame set. manifest.yaml at the store root is the index: for
-   every frame folder it records which raw video and which exact extraction
-   config (full snapshot, not just the name) produced it, plus frame count
-   and timestamp — so "what frames came from which raw data, extracted how"
-   is always answerable without touching DLC or walking folders by hand.
+3) The store supports duplicates on purpose — extract_frames_for_video() is
+   NOT idempotent. Every call creates a brand-new frame folder, even if you
+   pass the exact same video and config_name twice in a row. By default the
+   folder is named "<video_stem>__<config_name>", auto-incrementing to
+   "..._2", "..._3", ... whenever that name is already taken; pass an
+   explicit folder_name= to control it yourself instead. manifest.yaml at
+   the store root is the index: for every frame folder it records which raw
+   video and which exact extraction config (full snapshot, not just the
+   name) produced it, plus frame count and timestamp — so "what frames came
+   from which raw data, extracted how" is always answerable without
+   touching DLC or walking folders by hand.
 
 Videos are NEVER copied or symlinked into the store — video_sets just points
 at wherever the raw video already lives.
@@ -57,10 +59,18 @@ Usage
     extract_frames_for_video(store_path, "/raw_videos/HDMI-A.mp4")
     # -> labeled-data/HDMI-A__default/labeled-data/HDMI-A/*.png
 
-    # Define + use a different preset -> lands in its OWN folder:
+    # Same video, same preset, called again -> NOT skipped, gets its own folder:
+    extract_frames_for_video(store_path, "/raw_videos/HDMI-A.mp4")
+    # -> labeled-data/HDMI-A__default__2/labeled-data/HDMI-A/*.png
+
+    # Define + use a different preset -> its own folder too:
     save_extraction_config(store_path, ExtractionConfig(name="dense", numframes2pick=150))
     extract_frames_for_video(store_path, "/raw_videos/HDMI-A.mp4", config_name="dense")
-    # -> labeled-data/HDMI-A__dense/labeled-data/HDMI-A/*.png  (independent of the above)
+    # -> labeled-data/HDMI-A__dense/labeled-data/HDMI-A/*.png
+
+    # Or name the folder yourself:
+    extract_frames_for_video(store_path, "/raw_videos/HDMI-A.mp4", config_name="dense", folder_name="HDMI-A_run3")
+    # -> labeled-data/HDMI-A_run3/labeled-data/HDMI-A/*.png
 
     # See what's been extracted:
     list_extractions(store_path)
@@ -77,6 +87,7 @@ Usage
     # DLC can't tell this apart from a normal project config.
 """
 
+import shutil
 import yaml
 from dataclasses import dataclass, asdict, field
 from datetime import date as _date, datetime
@@ -153,21 +164,43 @@ def folder_id_for(video_path, config_name):
     return f"{Path(video_path).stem}__{config_name}"
 
 
-def extract_frames_for_video(store_path, video_path, config_name="default", overwrite=False):
-    """Extract frames for one (video, extraction_config) pair into its own
+def _next_available_folder_id(store_path, base_id):
+    """base_id if free, otherwise base_id__2, base_id__3, ... — first name
+    under labeled-data/ that doesn't exist yet."""
+    labeled_data_dir = Path(store_path).resolve() / "labeled-data"
+    candidate = base_id
+    n = 2
+    while (labeled_data_dir / candidate).exists():
+        candidate = f"{base_id}__{n}"
+        n += 1
+    return candidate
+
+
+def extract_frames_for_video(store_path, video_path, config_name="default", folder_name=None, overwrite=False):
+    """Extract frames for one (video, extraction_config) call into its own
     nested mini-project:
 
-        labeled-data/<video_stem>__<config_name>/
+        labeled-data/<folder_id>/
             config.yaml
             labeled-data/<video_stem>/*.png
 
-    Explicitly names both the raw video and the extraction preset — this is
-    what lets the same video be extracted multiple times, differently,
-    without one run clobbering another. Records the result in manifest.yaml.
+    Every call creates a NEW folder instance — this is intentionally not
+    idempotent. Even calling it twice with the identical video and the
+    identical config_name produces two separate frame sets, because you may
+    want repeated kmeans/uniform passes over the same source to sample
+    different frames.
 
-    Idempotent: if this exact (video, config) pair was already extracted,
-    skips DLC and just returns the existing project config path (pass
-    overwrite=True to force re-extraction).
+    folder_name:
+        - Omitted (default): folder_id auto-increments off
+          "<video_stem>__<config_name>" — first call gets that exact name,
+          later calls get "..._2", "..._3", etc. (first free name under
+          labeled-data/).
+        - Given: used as the exact folder_id. If it already exists, raises
+          FileExistsError unless overwrite=True (which deletes and
+          replaces that folder's contents).
+
+    Records the result in manifest.yaml under its (possibly auto-generated)
+    folder_id. Returns the new project's config.yaml path.
     """
     store_path = Path(store_path).resolve()
     video_path = str(Path(video_path).resolve())
@@ -176,16 +209,27 @@ def extract_frames_for_video(store_path, video_path, config_name="default", over
 
     ex_cfg = Extraction_config_Module.load_extraction_config(store_path, config_name)
     video_stem = Path(video_path).stem
-    folder_id = folder_id_for(video_path, ex_cfg.name)
-    project_dir = store_path / "labeled-data" / folder_id
+    base_id = folder_id_for(video_path, ex_cfg.name)
+
+    if folder_name is not None:
+        folder_id = folder_name
+        project_dir = store_path / "labeled-data" / folder_id
+        if project_dir.exists():
+            if not overwrite:
+                raise FileExistsError(
+                    f"labeled-data/{folder_id} already exists. Pass overwrite=True "
+                    f"to replace it, pick a different folder_name, or omit "
+                    f"folder_name to auto-generate a fresh one."
+                )
+            shutil.rmtree(project_dir)
+    else:
+        # Always a brand-new folder — never reuses an existing one, so
+        # duplicate (video, config) calls can never collide.
+        folder_id = _next_available_folder_id(store_path, base_id)
+        project_dir = store_path / "labeled-data" / folder_id
+
     frames_dir = project_dir / "labeled-data" / video_stem
     project_config_path = project_dir / "config.yaml"
-
-    already_extracted = frames_dir.is_dir() and any(p.suffix == ".png" for p in frames_dir.iterdir())
-    if already_extracted and not overwrite:
-        print(f"⏭  Already extracted: {folder_id}")
-        Manifest_Module._record_extraction(store_path, folder_id, video_path, video_stem, ex_cfg, frames_dir, project_config_path)
-        return project_config_path
 
     crop_entry = _video_crop_entry(video_path)
     project_dir.mkdir(parents=True, exist_ok=True)

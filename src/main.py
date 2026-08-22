@@ -24,7 +24,7 @@ print(Manifest_Module.list_extractions(store_path))
 
 # --- Once you're ready to label a SPECIFIC frame set ---------------------
 # (not needed just to extract frames above; bodyparts can differ per folder)
-#
+
 # init_labeling_config(
 #     store_path, "HDMI-A__default",
 #     scorer="Egor",
@@ -42,6 +42,6 @@ print(Manifest_Module.list_extractions(store_path))
 #         ["4_corner_table", "1_corner_table"],
 #     ],
 # )
-#
+
 # Your existing 3c_label_video.py should work unchanged, pointed at:
 #   store_path/labeled-data/HDMI-A__default/config.yaml
