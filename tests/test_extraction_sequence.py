@@ -50,6 +50,23 @@ DEFAULT_ID_2 = f"{VIDEO_STEM}__default__2"
 DENSE_ID = f"{VIDEO_STEM}__dense"
 CUSTOM_ID = "custom_run"
 
+# Mirrors the exact call now live in src/main.py — kept in one place so the
+# test fails loudly if that call and this test ever drift apart.
+SCORER = "Egor"
+BODYPARTS = [
+    "right_mitten_wrist", "right_mitten_tip",
+    "left_mitten_wrist", "left_mitten_tip",
+    "1_corner_table", "2_corner_table", "3_corner_table", "4_corner_table",
+]
+SKELETON = [
+    ["right_mitten_wrist", "right_mitten_tip"],
+    ["left_mitten_wrist", "left_mitten_tip"],
+    ["1_corner_table", "2_corner_table"],
+    ["2_corner_table", "3_corner_table"],
+    ["3_corner_table", "4_corner_table"],
+    ["4_corner_table", "1_corner_table"],
+]
+
 
 def _frames_dir(store_path, folder_id):
     return store_path / "labeled-data" / folder_id / "labeled-data" / VIDEO_STEM
@@ -189,23 +206,66 @@ def test_manifest_record_fields(executed_store, folder_id, config_name, algo, fr
     assert Path(record["project_config"]) == _project_config(executed_store, folder_id)
 
 
-# ── init_labeling_config() — schema stays independent per frame set ──
+# ── init_labeling_config() — the exact call now live in src/main.py ──
 
-def test_labeling_schema_is_independent_per_folder(executed_store):
+@pytest.fixture(scope="module")
+def labeled_store(executed_store):
+    """Runs the real labeling-schema call from main.py once, against
+    HDMI-A__default, so tests below only assert against the result."""
     init_labeling_config(
         executed_store, DEFAULT_ID,
-        scorer="Egor",
-        bodyparts=["nose", "tail"],
-        skeleton=[["nose", "tail"]],
+        scorer=SCORER,
+        bodyparts=BODYPARTS,
+        skeleton=SKELETON,
     )
+    return executed_store
 
-    default_cfg = yaml.safe_load(_project_config(executed_store, DEFAULT_ID).read_text())
-    dense_cfg = yaml.safe_load(_project_config(executed_store, DENSE_ID).read_text())
 
-    assert default_cfg["scorer"] == "Egor"
-    assert default_cfg["bodyparts"] == ["nose", "tail"]
-    # every other frame set must be completely unaffected
-    assert not dense_cfg.get("bodyparts")
+def test_labeling_config_sets_scorer_and_bodyparts(labeled_store):
+    cfg = yaml.safe_load(_project_config(labeled_store, DEFAULT_ID).read_text())
+    assert cfg["scorer"] == SCORER
+    # order matters — DLC keys CollectedData_<scorer>.h5 columns by this order
+    assert cfg["bodyparts"] == BODYPARTS
+
+
+def test_labeling_config_sets_skeleton_as_list_of_pairs(labeled_store):
+    cfg = yaml.safe_load(_project_config(labeled_store, DEFAULT_ID).read_text())
+    assert cfg["skeleton"] == SKELETON
+    assert all(isinstance(pair, list) and len(pair) == 2 for pair in cfg["skeleton"])
+    # every bodypart referenced in the skeleton must actually be a defined bodypart
+    referenced = {name for pair in cfg["skeleton"] for name in pair}
+    assert referenced <= set(cfg["bodyparts"])
+
+
+def test_labeling_config_forces_single_animal(labeled_store):
+    cfg = yaml.safe_load(_project_config(labeled_store, DEFAULT_ID).read_text())
+    assert cfg["multianimalproject"] is False
+
+
+def test_labeling_config_preserves_extraction_fields(labeled_store):
+    """Adding scorer/bodyparts/skeleton must not clobber what extraction
+    already wrote into this same config.yaml."""
+    record = get_extraction(labeled_store, DEFAULT_ID)
+    cfg = yaml.safe_load(_project_config(labeled_store, DEFAULT_ID).read_text())
+
+    assert cfg["project_path"] == str(labeled_store / "labeled-data" / DEFAULT_ID)
+    assert Path(list(cfg["video_sets"].keys())[0]) == Path(Setup.VIDEO).resolve()
+    assert cfg["numframes2pick"] == 50
+    assert cfg["engine"] == record["config"]["engine"]
+
+    # frames on disk are untouched by editing the config
+    pngs = list(_frames_dir(labeled_store, DEFAULT_ID).glob("*.png"))
+    assert len(pngs) == 50
+
+
+def test_labeling_config_does_not_touch_other_folders(labeled_store):
+    default_2_cfg = yaml.safe_load(_project_config(labeled_store, DEFAULT_ID_2).read_text())
+    dense_cfg = yaml.safe_load(_project_config(labeled_store, DENSE_ID).read_text())
+
+    for cfg in (default_2_cfg, dense_cfg):
+        assert not cfg.get("bodyparts")
+        assert not cfg.get("skeleton")
+        assert cfg.get("scorer") in (None, "")
 
 
 def test_labeling_config_rejects_unknown_folder(executed_store):
