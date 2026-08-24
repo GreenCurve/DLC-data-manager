@@ -6,6 +6,7 @@ from label_store import (
     init_store,
     extract_frames_for_video,
     init_labeling_config,
+    label_frames_for
 )
 
 store_path = init_store(Setup.STORE, numframes2pick=50)  # seeds extraction_configs/default.yaml
@@ -42,6 +43,9 @@ init_labeling_config(
         ["4_corner_table", "1_corner_table"],
     ],
 )
+
+
+label_frames_for(store_path, "HDMI-A__default")
 
 # Your existing 3c_label_video.py should work unchanged, pointed at:
 #   store_path/labeled-data/HDMI-A__default/config.yaml

@@ -50,7 +50,7 @@ Usage
 ─────
     from label_store import (
         init_store, extract_frames_for_video, init_labeling_config,
-        ExtractionConfig, save_extraction_config, list_extractions,
+        label_frames_for, ExtractionConfig, save_extraction_config, list_extractions,
     )
 
     store_path = init_store("/data/frames_store")   # seeds default.yaml preset
@@ -82,11 +82,11 @@ Usage
         bodyparts=["right_mitten_wrist", "right_mitten_tip", ...],
         skeleton=[["right_mitten_wrist", "right_mitten_tip"], ...],
     )
-    # Your existing 3c_label_video.py points napari at
-    # store_path/labeled-data/HDMI-A__default/config.yaml — unchanged usage,
-    # DLC can't tell this apart from a normal project config.
+    # Launch napari pre-loaded with that frame set — no manual drag-and-drop:
+    label_frames_for(store_path, "HDMI-A__default")
 """
 
+import inspect
 import shutil
 import yaml
 from dataclasses import dataclass, asdict, field
@@ -298,3 +298,68 @@ def init_labeling_config(store_path, folder_id, scorer, bodyparts, skeleton, tas
     auxiliaryfunctions.write_config(str(project_config_path), cfg)
     print(f"✅ Labeling schema set: {project_config_path}")
     return project_config_path
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Launching napari — no manual "find the folder, drag it in" needed
+# ────────────────────────────────────────────────────────────────────────
+
+def label_frames_for(store_path, folder_id, multiple=False):
+    """Open napari, pre-loaded with this frame set's images + config —
+    equivalent to manually running `napari` and dragging in
+    labeled-data/<folder_id>/labeled-data/<video_stem>/ plus
+    labeled-data/<folder_id>/config.yaml yourself.
+
+    Thin wrapper around deeplabcut.label_frames(), which is what actually
+    activates the napari-deeplabcut plugin and opens both. Blocks (via
+    napari.run()) until you close the napari window; whatever you save
+    (Ctrl+S) lands in the usual CollectedData_<scorer>.h5/.csv inside that
+    frame set's folder.
+
+    multiple=True enables multi-individual labeling — leave False for a
+    single-animal project.
+    """
+    store_path = Path(store_path).resolve()
+    project_config_path = store_path / "labeled-data" / folder_id / "config.yaml"
+    if not project_config_path.exists():
+        raise FileNotFoundError(
+            f"No extraction project at {project_config_path.parent} — "
+            f"call extract_frames_for_video() for this video/config first."
+        )
+
+    cfg = auxiliaryfunctions.read_config(str(project_config_path))
+    if not cfg.get("bodyparts"):
+        raise ValueError(
+            f"{project_config_path} has no bodyparts set yet — "
+            f"call init_labeling_config(store_path, '{folder_id}', ...) first."
+        )
+
+    # deeplabcut.label_frames()'s signature varies across DLC versions — some
+    # accept a `multiple` kwarg for multi-individual labeling, some don't
+    # (multianimalproject in config.yaml is enough on newer versions). Only
+    # pass it through if this installed version actually supports it, so
+    # calling with the default multiple=False never breaks on any version.
+    accepted_params = inspect.signature(deeplabcut.label_frames).parameters
+    kwargs = {}
+    if "multiple" in accepted_params:
+        kwargs["multiple"] = multiple
+    elif multiple:
+        raise TypeError(
+            "Your installed deeplabcut.label_frames() doesn't accept a "
+            "'multiple' argument. If you need multi-individual labeling, set "
+            "multianimalproject: true directly in this frame set's config.yaml "
+            "instead, or upgrade deeplabcut."
+        )
+
+    deeplabcut.label_frames(str(project_config_path), **kwargs)
+
+    # deeplabcut.label_frames() opens the napari viewer but, on some DLC
+    # versions, returns immediately WITHOUT blocking until you close it. If
+    # nothing keeps the process alive, the script ends right after this call,
+    # tearing down the Qt app (and its background threads, e.g. the update
+    # "StatusChecker") mid-session — that's the "opens for a second then
+    # crashes with QThread: Destroyed while thread is still running" failure.
+    # napari.run() enters napari's own event loop and simply returns once you
+    # close the window, so labeling actually gets to happen first.
+    import napari
+    napari.run()
