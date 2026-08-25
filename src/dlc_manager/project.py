@@ -181,6 +181,15 @@ class DataProject:
     def label_frames_for(self, folder_id, multiple=False):
         return label_store_module.label_frames_for(self.store, folder_id, multiple=multiple)
 
+    def import_legacy_project(self, dlc_project_root, config_name="imported"):
+        """Bring every labeled frame set from an old, standalone DLC
+        project into this project's frame store — see
+        label_store.import_legacy_project() for details. raw_videos_root is
+        always this project's own raw_videos/ (searched recursively)."""
+        return label_store_module.import_legacy_project(
+            self.store, dlc_project_root, self.raw_videos, config_name=config_name
+        )
+
     def folder_id_for(self, video_path, config_name):
         return label_store_module.folder_id_for(video_path, config_name)
 

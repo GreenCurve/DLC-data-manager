@@ -54,6 +54,7 @@ from .label_store import (
     extract_frames_for_video,
     init_labeling_config,
     label_frames_for,
+    import_legacy_project,
     folder_id_for,
     VIDEO_EXTENSIONS,
 )
@@ -80,6 +81,7 @@ __all__ = [
     "extract_frames_for_video",
     "init_labeling_config",
     "label_frames_for",
+    "import_legacy_project",
     "folder_id_for",
     "VIDEO_EXTENSIONS",
     "create_project",

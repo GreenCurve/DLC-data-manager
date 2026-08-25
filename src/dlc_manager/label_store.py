@@ -27,7 +27,7 @@ Design (v2)
 2) Extraction parameters are a first-class, versioned object: ExtractionConfig.
    It holds exactly what deeplabcut.extract_frames() needs (algo, mode,
    userfeedback, numframes2pick, start, stop, engine). Presets are saved as
-   YAML under <store_path>/extraction_configs/<name>.yaml and referenced by
+   YAML under <store_path>/extraction_configs/<n>.yaml and referenced by
    name wherever you extract. Keep as many presets as you want
    (default.yaml, dense.yaml, uniform_pass.yaml, ...).
 
@@ -323,6 +323,174 @@ def extract_frames_for_video(store_path, video_path, config_name="default", fold
     frame_count = sum(1 for p in frames_dir.iterdir() if p.suffix == ".png")
     print(f"🎞  Extracted {frame_count} frames → labeled-data/{folder_id}/labeled-data/{video_stem}")
     return project_config_path
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Importing labeled-data from an old, flat (pre-store) DLC project
+# ────────────────────────────────────────────────────────────────────────
+
+def _find_video_for_stem(raw_videos_root, video_stem):
+    """The single video file under raw_videos_root (recursively) whose stem
+    matches video_stem exactly. Raises rather than guessing if zero or more
+    than one file matches — ambiguity here would silently mislabel a frame
+    set's source video."""
+    raw_videos_root = Path(raw_videos_root).resolve()
+    matches = [p for p in _find_videos_in_folder(raw_videos_root) if p.stem == video_stem]
+    if not matches:
+        raise FileNotFoundError(
+            f"No video under {raw_videos_root} matches stem '{video_stem}' "
+            f"(looked for {sorted(VIDEO_EXTENSIONS)}). Make sure the source "
+            f"video for this labeled-data folder has been placed there."
+        )
+    if len(matches) > 1:
+        raise RuntimeError(
+            f"Ambiguous match for stem '{video_stem}' under {raw_videos_root}: "
+            f"{[str(m) for m in matches]}. Exactly one file must match."
+        )
+    return matches[0]
+
+
+def import_legacy_project(store_path, dlc_project_root, raw_videos_root, config_name="imported"):
+    """Bring every frame set from an old-style, standalone DLC project
+    (created before this store existed — one flat project with its own
+    labeled-data/<video_stem>/ folders and a single root config.yaml) into
+    this store, one new frame-set folder per video:
+
+        labeled-data/<folder_id>/
+            config.yaml                         ← scorer/bodyparts/skeleton
+                                                    copied straight from the
+                                                    source project — this
+                                                    frame set is already
+                                                    labeled, no
+                                                    init_labeling_config()
+                                                    call needed.
+            labeled-data/<video_stem>/*.png, CollectedData_<scorer>.h5
+
+    dlc_project_root: absolute path to the OLD project's root — the folder
+        containing that project's own config.yaml and labeled-data/.
+
+    raw_videos_root: folder to search (recursively) for each labeled-data
+        subfolder's source video, matched by filename stem. The old
+        project's config.yaml video_sets paths are NOT used for this —
+        those point at wherever the video lived when the old project was
+        created (often a different machine), which is exactly why you scan
+        your own raw_videos/ instead.
+
+    config_name: recorded as this frame set's config_name in manifest.yaml
+        (there's no real ExtractionConfig behind imported data — the
+        original extract_frames() call, if any, predates this store and
+        its parameters weren't preserved anywhere retrievable). Distinct
+        imports can use different names if you want to keep them apart.
+
+    One frame-set folder is created per video_stem subfolder found under
+    dlc_project_root/labeled-data/ — subfolders with no *.png are skipped;
+    subfolders with pngs but no CollectedData_<scorer>.h5 are imported as
+    unlabeled frames (a warning is printed). Every call creates brand-new
+    folders, same as extract_frames_for_video() — safe to re-run, though
+    re-running with the same config_name will just pile up new copies.
+
+    Returns a dict of {video_path: config.yaml path}, one entry per
+    imported video — same shape extract_frames_for_video() returns for a
+    folder input.
+    """
+    store_path = Path(store_path).resolve()
+    dlc_project_root = Path(dlc_project_root).resolve()
+    raw_videos_root = Path(raw_videos_root).resolve()
+
+    source_config_path = dlc_project_root / "config.yaml"
+    if not source_config_path.is_file():
+        raise FileNotFoundError(
+            f"No config.yaml at {dlc_project_root} — is this a DLC project root?"
+        )
+
+    source_cfg = auxiliaryfunctions.read_config(str(source_config_path))
+    scorer = source_cfg.get("scorer")
+    bodyparts = source_cfg.get("bodyparts") or []
+    if not scorer or not bodyparts:
+        raise ValueError(
+            f"{source_config_path} has no scorer/bodyparts set — doesn't look "
+            f"like a labeled DLC project."
+        )
+    skeleton = [list(pair) for pair in source_cfg.get("skeleton", [])]
+    engine = source_cfg.get("engine", "pytorch")
+    multianimalproject = source_cfg.get("multianimalproject", False)
+    start = source_cfg.get("start", 0.0)
+    stop = source_cfg.get("stop", 1.0)
+
+    source_labeled_data = dlc_project_root / "labeled-data"
+    if not source_labeled_data.is_dir():
+        raise FileNotFoundError(f"No labeled-data/ folder under {dlc_project_root}")
+
+    video_stem_dirs = sorted(p for p in source_labeled_data.iterdir() if p.is_dir())
+    if not video_stem_dirs:
+        raise FileNotFoundError(f"labeled-data/ under {dlc_project_root} contains no frame folders.")
+
+    results = {}
+    for src_dir in video_stem_dirs:
+        video_stem = src_dir.name
+        pngs = list(src_dir.glob("*.png"))
+        if not pngs:
+            print(f"⏭  Skipping {video_stem}: no frames (*.png) found.")
+            continue
+
+        h5_path = src_dir / f"CollectedData_{scorer}.h5"
+        if not h5_path.exists():
+            print(f"⚠️  {video_stem}: no CollectedData_{scorer}.h5 — importing unlabeled frames.")
+
+        try:
+            video_path = _find_video_for_stem(raw_videos_root, video_stem)
+        except FileNotFoundError:
+            print(f"!! Skipping {video_stem}: no source video found!")
+            continue
+
+        base_id = folder_id_for(str(video_path), config_name)
+        folder_id = _next_available_folder_id(store_path, base_id)
+        project_dir = store_path / "labeled-data" / folder_id
+        # frames_dir keeps the SAME leaf folder name (video_stem) the source
+        # used — CollectedData_<scorer>.h5's row index bakes in that folder
+        # name, so leaving it unchanged means no relocation is needed (unlike
+        # network_store.add_labeled_data(), which renames the leaf folder and
+        # therefore has to patch the index).
+        frames_dir = project_dir / "labeled-data" / video_stem
+        project_config_path = project_dir / "config.yaml"
+
+        project_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(src_dir, frames_dir)
+
+        crop_entry = _video_crop_entry(video_path)
+        cfg, _ = auxiliaryfunctions.create_config_template()
+        cfg["project_path"] = str(project_dir)
+        cfg["video_sets"] = {str(video_path): crop_entry}
+        cfg["engine"] = engine
+        cfg["numframes2pick"] = len(pngs)
+        cfg["start"] = start
+        cfg["stop"] = stop
+        cfg["date"] = _date.today().strftime("%b%d")
+        cfg["scorer"] = scorer
+        cfg["bodyparts"] = list(bodyparts)
+        cfg["skeleton"] = skeleton
+        cfg["multianimalproject"] = multianimalproject
+        auxiliaryfunctions.write_config(str(project_config_path), cfg)
+
+        ex_cfg = extraction_config_module.ExtractionConfig(
+            name=config_name,
+            algo="imported",
+            mode="imported",
+            userfeedback=False,
+            numframes2pick=len(pngs),
+            start=start,
+            stop=stop,
+            engine=engine,
+        )
+        manifest_module._record_extraction(
+            store_path, folder_id, str(video_path), video_stem, ex_cfg, frames_dir, project_config_path,
+            extra={"imported_from": str(dlc_project_root)},
+        )
+
+        print(f"📥 Imported {video_stem} ({len(pngs)} frames) ← {dlc_project_root.name} → labeled-data/{folder_id}")
+        results[str(video_path)] = project_config_path
+
+    return results
 
 
 # ────────────────────────────────────────────────────────────────────────

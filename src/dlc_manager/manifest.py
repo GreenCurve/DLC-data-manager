@@ -39,11 +39,14 @@ def get_extraction(store_path, folder_id):
     return record
 
 
-def _record_extraction(store_path, folder_id, video_path, video_stem, ex_cfg, frames_dir, project_config_path):
+def _record_extraction(store_path, folder_id, video_path, video_stem, ex_cfg, frames_dir, project_config_path, extra=None):
+    """extra: optional dict of additional fields to merge into the record —
+    e.g. {"imported_from": "<legacy DLC project root>"} for frame sets that
+    came from import_legacy_project() rather than a real extraction call."""
     manifest = _load_manifest(store_path)
     extractions = manifest.setdefault("extractions", {})
     frame_count = sum(1 for p in frames_dir.iterdir() if p.suffix == ".png")
-    extractions[folder_id] = {
+    record = {
         "video_path": video_path,
         "video_stem": video_stem,
         "config_name": ex_cfg.name,
@@ -52,4 +55,7 @@ def _record_extraction(store_path, folder_id, video_path, video_stem, ex_cfg, fr
         "project_config": str(project_config_path),
         "updated_at": datetime.now().isoformat(timespec="seconds"),
     }
+    if extra:
+        record.update(extra)
+    extractions[folder_id] = record
     _save_manifest(store_path, manifest)
