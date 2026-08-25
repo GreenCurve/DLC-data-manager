@@ -14,16 +14,25 @@ call creates a brand-new labeled-data/<folder_id> instance. Default calls
 auto-increment ("HDMI-A__default", "HDMI-A__default__2", ...); an explicit
 folder_name= pins the name and requires overwrite=True to replace it.
 
+extract_frames_for_video() also accepts a FOLDER instead of a single video
+file: it recurses through the folder, finds every file matching
+VIDEO_EXTENSIONS, and extracts each one individually (own auto-generated
+folder_id per video), returning a dict of {video_path: config.yaml path}.
+folder_name= is rejected outright when given a folder, since it can't apply
+to more than one discovered video.
+
 This runs REAL deeplabcut.extract_frames() (kmeans + uniform) against
 Setup.VIDEO — it is a slow integration test, not a mock-based unit test.
 Two throwaway stores are used (under pytest's tmp_path) so your real
 frames_store on disk is never touched; only the raw video (read-only) is
-reused from Setup.VIDEO.
+reused from Setup.VIDEO (and copied into scratch folders for the
+folder-input tests, since extraction needs distinct video files/stems).
 
 Run from repo root with your DLC env active:
     pytest tests/test_extraction_sequence.py -v -s
 """
 
+import shutil
 import sys
 from pathlib import Path
 
@@ -39,6 +48,8 @@ from label_store import (
     extract_frames_for_video,
     init_labeling_config,
     _next_available_folder_id,
+    _find_videos_in_folder,
+    VIDEO_EXTENSIONS,
 )
 from Extraction_config_Module import ExtractionConfig, save_extraction_config
 from Manifest_Module import list_extractions, get_extraction
@@ -68,8 +79,8 @@ SKELETON = [
 ]
 
 
-def _frames_dir(store_path, folder_id):
-    return store_path / "labeled-data" / folder_id / "labeled-data" / VIDEO_STEM
+def _frames_dir(store_path, folder_id, video_stem=VIDEO_STEM):
+    return store_path / "labeled-data" / folder_id / "labeled-data" / video_stem
 
 
 def _project_config(store_path, folder_id):
@@ -88,6 +99,24 @@ def test_next_available_folder_id_skips_existing(tmp_path):
     (tmp_path / "labeled-data" / "foo").mkdir(parents=True)
     (tmp_path / "labeled-data" / "foo__2").mkdir(parents=True)
     assert _next_available_folder_id(tmp_path, "foo") == "foo__3"
+
+
+def test_find_videos_in_folder_is_recursive_and_extension_filtered(tmp_path):
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "a.mp4").write_bytes(b"")
+    (tmp_path / "sub" / "b.MOV").write_bytes(b"")           # case-insensitive
+    (tmp_path / "notes.txt").write_bytes(b"")                # ignored
+    (tmp_path / "sub" / "c.mp4.bak").write_bytes(b"")        # ignored
+
+    found = _find_videos_in_folder(tmp_path)
+    names = sorted(p.name for p in found)
+    assert names == ["a.mp4", "b.MOV"]
+
+
+def test_video_extensions_are_lowercase():
+    # extension matching lowercases the suffix, so entries must already be
+    # lowercase or case-insensitive matching silently breaks.
+    assert all(ext == ext.lower() for ext in VIDEO_EXTENSIONS)
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -322,3 +351,129 @@ def test_explicit_folder_name_collision_with_overwrite_replaces(folder_name_stor
 
     record = get_extraction(folder_name_store, CUSTOM_ID)
     assert record["frame_count"] == 20
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Folder input — extract_frames_for_video(store_path, <folder>, ...)
+#
+# extraction still needs real, distinct video files (cv2 has to open them
+# and DLC has to run kmeans/uniform on each), so Setup.VIDEO is copied under
+# different stems/locations rather than mocked. Two real videos is enough
+# to prove recursion + per-video isolation without tripling the runtime of
+# the "default" sequence above.
+# ────────────────────────────────────────────────────────────────────────
+
+TOP_VIDEO_STEM = "cam-top"
+NESTED_VIDEO_STEM = "cam-nested"
+TOP_ID = f"{TOP_VIDEO_STEM}__default"
+NESTED_ID = f"{NESTED_VIDEO_STEM}__default"
+
+
+@pytest.fixture(scope="module")
+def raw_videos_folder(tmp_path_factory):
+    """A folder with one video at the top level, one nested a level down,
+    and a couple of non-video files that must be ignored."""
+    root = tmp_path_factory.mktemp("raw_videos")
+    src = Path(Setup.VIDEO)
+
+    shutil.copy(src, root / f"{TOP_VIDEO_STEM}{src.suffix}")
+    (root / "notes.txt").write_text("not a video, must be ignored")
+
+    nested = root / "session_02"
+    nested.mkdir()
+    shutil.copy(src, nested / f"{NESTED_VIDEO_STEM}{src.suffix}")
+    (nested / "README.md").write_text("also not a video")
+
+    return root
+
+
+@pytest.fixture(scope="module")
+def folder_extraction_store(tmp_path_factory, raw_videos_folder):
+    store_path = init_store(tmp_path_factory.mktemp("folder_input_store"), numframes2pick=20)
+    results = extract_frames_for_video(store_path, raw_videos_folder, config_name="default")
+    return store_path, results
+
+
+def test_folder_input_extracts_every_video_recursively(folder_extraction_store):
+    store_path, _results = folder_extraction_store
+
+    for folder_id, stem in [(TOP_ID, TOP_VIDEO_STEM), (NESTED_ID, NESTED_VIDEO_STEM)]:
+        project_config = _project_config(store_path, folder_id)
+        frames_dir = _frames_dir(store_path, folder_id, video_stem=stem)
+
+        assert project_config.is_file(), f"missing config for {folder_id}"
+        assert frames_dir.is_dir(), f"missing frames dir for {folder_id}"
+
+        pngs = list(frames_dir.glob("*.png"))
+        assert len(pngs) == 20, f"expected 20 frames for {folder_id}, got {len(pngs)}"
+
+
+def test_folder_input_ignores_non_video_files(folder_extraction_store):
+    store_path, _results = folder_extraction_store
+    manifest = list_extractions(store_path)
+    # exactly the two real videos — notes.txt/README.md never became entries
+    assert set(manifest.keys()) == {TOP_ID, NESTED_ID}
+
+
+def test_folder_input_returns_dict_keyed_by_resolved_video_path(folder_extraction_store, raw_videos_folder):
+    store_path, results = folder_extraction_store
+
+    assert isinstance(results, dict)
+    assert len(results) == 2
+
+    top_video = (raw_videos_folder / f"{TOP_VIDEO_STEM}{Path(Setup.VIDEO).suffix}").resolve()
+    nested_video = (raw_videos_folder / "session_02" / f"{NESTED_VIDEO_STEM}{Path(Setup.VIDEO).suffix}").resolve()
+
+    assert set(results.keys()) == {str(top_video), str(nested_video)}
+    assert results[str(top_video)] == _project_config(store_path, TOP_ID)
+    assert results[str(nested_video)] == _project_config(store_path, NESTED_ID)
+
+
+def test_folder_input_records_correct_source_video_per_entry(folder_extraction_store, raw_videos_folder):
+    store_path, _results = folder_extraction_store
+
+    top_record = get_extraction(store_path, TOP_ID)
+    nested_record = get_extraction(store_path, NESTED_ID)
+
+    top_video = (raw_videos_folder / f"{TOP_VIDEO_STEM}{Path(Setup.VIDEO).suffix}").resolve()
+    nested_video = (raw_videos_folder / "session_02" / f"{NESTED_VIDEO_STEM}{Path(Setup.VIDEO).suffix}").resolve()
+
+    assert Path(top_record["video_path"]) == top_video
+    assert top_record["video_stem"] == TOP_VIDEO_STEM
+    assert Path(nested_record["video_path"]) == nested_video
+    assert nested_record["video_stem"] == NESTED_VIDEO_STEM
+
+
+def test_folder_input_rejects_explicit_folder_name(tmp_path_factory, raw_videos_folder):
+    store_path = init_store(tmp_path_factory.mktemp("folder_input_reject_store"), numframes2pick=20)
+    # Must raise before any DLC call — folder_name can't map to >1 video.
+    with pytest.raises(ValueError):
+        extract_frames_for_video(store_path, raw_videos_folder, config_name="default", folder_name="whatever")
+    assert list_extractions(store_path) == {}
+
+
+def test_folder_input_raises_when_no_videos_found(tmp_path_factory):
+    store_path = init_store(tmp_path_factory.mktemp("folder_input_empty_store"))
+    empty_folder = tmp_path_factory.mktemp("empty_raw_videos")
+    (empty_folder / "readme.txt").write_text("no videos in here")
+
+    with pytest.raises(FileNotFoundError):
+        extract_frames_for_video(store_path, empty_folder, config_name="default")
+
+
+def test_folder_input_matches_extensions_case_insensitively(tmp_path_factory, raw_videos_folder):
+    """A second folder containing only an uppercase-extension copy of the
+    source video must still be picked up."""
+    store_path = init_store(tmp_path_factory.mktemp("folder_input_uppercase_store"), numframes2pick=20)
+    root = tmp_path_factory.mktemp("raw_videos_uppercase")
+    src = Path(Setup.VIDEO)
+    uppercase_video = root / f"cam-upper{src.suffix.upper()}"
+    shutil.copy(src, uppercase_video)
+
+    results = extract_frames_for_video(store_path, root, config_name="default")
+
+    assert len(results) == 1
+    folder_id = "cam-upper__default"
+    assert _project_config(store_path, folder_id).is_file()
+    pngs = list(_frames_dir(store_path, folder_id, video_stem="cam-upper").glob("*.png"))
+    assert len(pngs) == 20
