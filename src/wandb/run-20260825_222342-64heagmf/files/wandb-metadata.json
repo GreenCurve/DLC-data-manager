@@ -1,0 +1,47 @@
+{
+  "os": "Linux-6.8.0-138-generic-x86_64-with-glibc2.35",
+  "python": "CPython 3.11.15",
+  "startedAt": "2026-08-25T20:23:42.942671Z",
+  "program": "/home/ccldlc/Desktop/DLC/DLC-data-managenet/src/run_training.py",
+  "codePath": "src/run_training.py",
+  "codePathLocal": "run_training.py",
+  "git": {
+    "remote": "git@github.com:GreenCurve/DLC-data-managenet.git",
+    "commit": "a3e90ec8df5c0a000ca573bcb4eda0ab49f905ab"
+  },
+  "email": "skviby@gmail.com",
+  "root": "/home/ccldlc/Desktop/DLC/DLC-data-managenet/src",
+  "host": "ccldlc-System-Product-Name",
+  "executable": "/home/ccldlc/miniconda3/envs/DLC/bin/python",
+  "cpu_count": 32,
+  "cpu_count_logical": 64,
+  "gpu": "NVIDIA GeForce RTX 5080",
+  "gpu_count": 2,
+  "disk": {
+    "/": {
+      "total": "982820896768",
+      "used": "772855881728"
+    }
+  },
+  "memory": {
+    "total": "134532796416"
+  },
+  "gpu_nvidia": [
+    {
+      "name": "NVIDIA GeForce RTX 5080",
+      "memoryTotal": "17094934528",
+      "cudaCores": 10752,
+      "architecture": "Blackwell",
+      "uuid": "GPU-5e93f3df-e8da-cfd9-d116-f1ab73e1b1d6"
+    },
+    {
+      "name": "NVIDIA GeForce RTX 5080",
+      "memoryTotal": "17094934528",
+      "cudaCores": 10752,
+      "architecture": "Blackwell",
+      "uuid": "GPU-9c084ee4-da47-9e90-f7b4-30fa953f7cc9"
+    }
+  ],
+  "cudaVersion": "13.0",
+  "writerId": "mbxv6iijy4q6vnrwqyu3ufdk98n0846b"
+}

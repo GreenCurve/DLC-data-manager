@@ -90,8 +90,18 @@ class NetworkProject:
             self.config_path, net_type=net_type, **kwargs
         )
 
-    def train_network(self, **kwargs):
-        return network_store_module.train_network(self.config_path, **kwargs)
+    def train_network(self, wandb_project=None, wandb_run_name=None, wandb_tags=None, wandb_image_log_interval=None, **kwargs):
+        """See network_store.train_network() — pass wandb_project to log
+        this run to Weights & Biases (requires `pip install
+        "deeplabcut[wandb]"` and `wandb login` once beforehand)."""
+        return network_store_module.train_network(
+            self.config_path,
+            wandb_project=wandb_project,
+            wandb_run_name=wandb_run_name,
+            wandb_tags=wandb_tags,
+            wandb_image_log_interval=wandb_image_log_interval,
+            **kwargs,
+        )
 
     def list_labeled_data(self):
         return network_store_module.list_labeled_data(self.config_path)

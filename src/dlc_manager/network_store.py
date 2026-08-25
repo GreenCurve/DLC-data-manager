@@ -67,6 +67,8 @@ Usage
     train_network(project_config, epochs=600)
 """
 
+import copy
+import re
 import shutil
 import pandas as pd
 import yaml
@@ -76,6 +78,7 @@ from pathlib import Path
 import deeplabcut
 from deeplabcut.compat import Engine
 from deeplabcut.utils import auxiliaryfunctions
+from pydantic import ValidationError
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -323,6 +326,139 @@ def create_train_dataset(project_config, net_type="resnet_50", **kwargs):
     )
 
 
+def _with_wandb_logger(pytorch_cfg_updates, project_config, shuffle, wandb_project, wandb_run_name, wandb_tags, wandb_image_log_interval):
+    """Merge a `logger: {type: WandbLogger, ...}` block into
+    pytorch_cfg_updates, so callers configure W&B via a few plain kwargs
+    instead of hand-building the nested pytorch_config.yaml dict.
+
+    Does nothing if wandb_project is None (the default) — training then
+    behaves exactly as before, logging only to the model folder.
+
+    run_name default: "<network-project-name>-shuffle<N>" so runs are
+    identifiable in the W&B UI without extra bookkeeping.
+    """
+    if wandb_project is None:
+        return pytorch_cfg_updates or {}
+
+    project_config = Path(project_config)
+    logger_cfg = {
+        "type": "WandbLogger",
+        "project_name": wandb_project,
+        "run_name": wandb_run_name or f"{project_config.parent.name}-shuffle{shuffle}",
+    }
+    if wandb_tags:
+        logger_cfg["tags"] = list(wandb_tags)
+    if wandb_image_log_interval is not None:
+        logger_cfg["image_log_interval"] = wandb_image_log_interval
+
+    updates = dict(pytorch_cfg_updates or {})
+    # Merge rather than overwrite, in case a caller already passed other
+    # top-level pytorch_config.yaml keys via pytorch_cfg_updates.
+    updates["logger"] = {**updates.get("logger", {}), **logger_cfg}
+    return updates
+
+
+_wandb_logger_build_patched = False
+
+
+def _patch_wandb_logger_build():
+    """Best-effort fix for the actual bug: some installed DLC versions
+    (confirmed: 3.0.1) have a WandbLogger config *schema* that includes a
+    field (e.g. wandb_kwargs) the real WandbLogger *class* constructor
+    doesn't accept — so DLC's own LOGGER.build() raises TypeError deep
+    inside training, well after config validation already passed, right as
+    it's about to call wandb.init(). No pytorch_cfg_updates trimming can
+    prevent this: the field comes from the schema's own defaults, not from
+    anything we send.
+
+    Rather than disabling W&B logging to work around that, wrap DLC's
+    LOGGER.build() so that if it hits exactly this TypeError, it parses the
+    bad keyword straight out of DLC's own error message, drops just that
+    key, and retries — so the real WandbLogger still gets constructed and
+    logging actually happens. Idempotent (safe to call every train_network()
+    call) and strictly best-effort: if DLC's internals don't look like what
+    we expect here (different registry API in a different DLC version),
+    this quietly does nothing and train_network()'s existing TypeError
+    fallback (disable W&B, keep training) remains the safety net.
+    """
+    global _wandb_logger_build_patched
+    if _wandb_logger_build_patched:
+        return
+    try:
+        from deeplabcut.pose_estimation_pytorch.apis import training as _dlc_training
+    except ImportError:
+        return
+    logger_registry = getattr(_dlc_training, "LOGGER", None)
+    if logger_registry is None or not hasattr(logger_registry, "build"):
+        return
+
+    original_build = logger_registry.build
+
+    def patched_build(cfg, *args, **kwargs):
+        cfg = dict(cfg)
+        for _ in range(5):  # generous cap in case more than one field is bad
+            try:
+                return original_build(cfg, *args, **kwargs)
+            except TypeError as e:
+                m = re.search(r"unexpected keyword argument '([^']+)'", str(e))
+                if not m or m.group(1) not in cfg:
+                    raise
+                bad_key = m.group(1)
+                del cfg[bad_key]
+                print(
+                    f"⚠️  Dropping unsupported logger field '{bad_key}' — your "
+                    f"installed DLC's WandbLogger constructor doesn't accept it "
+                    f"even though its own config schema includes it. Retrying "
+                    f"so W&B logging still goes through."
+                )
+        return original_build(cfg, *args, **kwargs)
+
+    logger_registry.build = patched_build
+    _wandb_logger_build_patched = True
+
+
+def _strip_extra_forbidden_fields(pytorch_cfg_updates, validation_error):
+    """DLC validates pytorch_cfg_updates against a pydantic schema that's
+    tied to your installed DLC version — e.g. some versions' WandbLogger
+    schema doesn't accept 'tags' even though the online docs say any
+    wandb.init() kwarg is allowed. Rather than hard-fail on that mismatch,
+    pull the offending field name(s) straight out of the ValidationError
+    (pydantic reports them as "extra_forbidden") and drop just those keys.
+
+    pydantic's error loc for a rejected field on a discriminated-union
+    model (like `logger: WandbLogger`) includes the union arm's type name
+    as a synthetic path segment — e.g. loc=("logger", "WandbLogger",
+    "tags") — which isn't an actual key in the plain dict we built (there's
+    no updates["logger"]["WandbLogger"]). So the walk below skips any loc
+    segment that doesn't match a real dict key instead of giving up, and
+    deletes the leaf field from wherever it actually landed.
+
+    Returns (trimmed_dict, [dropped field paths]), or (None, []) if the
+    error contained nothing we know how to strip (caller should re-raise).
+    """
+    updates = copy.deepcopy(pytorch_cfg_updates)
+    dropped = []
+    for err in validation_error.errors():
+        if err.get("type") != "extra_forbidden":
+            continue
+        loc = err.get("loc", ())
+        if not loc:
+            continue
+        leaf = loc[-1]
+        node = updates
+        for part in loc[:-1]:
+            if isinstance(node, dict) and part in node and isinstance(node[part], dict):
+                node = node[part]
+            # else: this loc segment doesn't correspond to a real key
+            # (e.g. a discriminated-union arm name) — stay at current node.
+        if isinstance(node, dict) and leaf in node:
+            del node[leaf]
+            dropped.append(".".join(str(p) for p in loc))
+    if not dropped:
+        return None, []
+    return updates, dropped
+
+
 def train_network(
     project_config,
     shuffle=1,
@@ -331,17 +467,90 @@ def train_network(
     display_iters=500,
     batch_size=24,
     pytorch_cfg_updates=None,
+    wandb_project=None,
+    wandb_run_name=None,
+    wandb_tags=None,
+    wandb_image_log_interval=None,
     **kwargs,
 ):
-    """Wraps deeplabcut.train_network(), pinned to Engine.PYTORCH."""
-    return deeplabcut.train_network(
-        str(project_config),
+    """Wraps deeplabcut.train_network(), pinned to Engine.PYTORCH.
+
+    W&B logging (optional): pass wandb_project to have this run logged to
+    Weights & Biases. Requires `pip install "deeplabcut[wandb]"` and having
+    run `wandb login` once beforehand — see the package README for setup.
+
+        net.train_network(epochs=600, wandb_project="mitten-tracker")
+
+    wandb_run_name defaults to "<network-project-name>-shuffle<N>".
+    wandb_tags: optional list of strings, e.g. ["resnet50", "split=0"].
+    wandb_image_log_interval: optional int — if set, periodically logs a
+    sample train/test image with predicted heatmaps to W&B.
+
+    Leave wandb_project unset (the default) for no change in behavior —
+    training logs only to the model folder, same as before this option
+    existed. Any of these can also be set by hand via pytorch_cfg_updates
+    (see the DLC pytorch_config.yaml `logger` reference) if you need more
+    control than these kwargs expose.
+
+    If your installed DLC's config schema rejects one of these fields (its
+    pydantic model is stricter than the online docs — this happens, e.g.
+    some versions reject the WandbLogger `tags` field), that field is
+    dropped and training is retried automatically, with a warning printed.
+
+    Separately, some DLC versions (confirmed: 3.0.1) have an internal bug
+    where the WandbLogger *class* doesn't accept every field its own config
+    *schema* claims to support (a `wandb_kwargs` TypeError at logger
+    construction time, well after config validation passes). This can't be
+    fixed by trimming our config — the field comes from the schema's own
+    defaults — so instead DLC's logger-construction call is patched (see
+    _patch_wandb_logger_build) to drop just that field and retry, so W&B
+    logging still actually happens. If that patch doesn't apply cleanly to
+    your installed DLC version, W&B logging is disabled for this run
+    instead of crashing training, with a warning explaining why.
+
+    Either way, training itself is never blocked by a broken W&B config.
+    """
+    pytorch_cfg_updates = _with_wandb_logger(
+        pytorch_cfg_updates, project_config, shuffle,
+        wandb_project, wandb_run_name, wandb_tags, wandb_image_log_interval,
+    )
+    if pytorch_cfg_updates.get("logger"):
+        _patch_wandb_logger_build()
+    train_kwargs = dict(
         shuffle=shuffle,
         epochs=epochs,
         save_epochs=save_epochs,
         display_iters=display_iters,
         batch_size=batch_size,
         engine=Engine.PYTORCH,
-        pytorch_cfg_updates=pytorch_cfg_updates or {},
         **kwargs,
     )
+
+    updates = pytorch_cfg_updates
+    max_remediations = 3  # generous headroom for stacking fixes (e.g. tags + wandb_kwargs)
+    for _ in range(max_remediations):
+        try:
+            return deeplabcut.train_network(
+                str(project_config), pytorch_cfg_updates=updates, **train_kwargs
+            )
+        except ValidationError as e:
+            trimmed, dropped = _strip_extra_forbidden_fields(updates, e)
+            if trimmed is None:
+                raise
+            print(
+                f"⚠️  Your installed DLC version's config schema doesn't support: "
+                f"{', '.join(dropped)} — retrying without them."
+            )
+            updates = trimmed
+        except TypeError as e:
+            if not updates.get("logger") or "wandb" not in str(e).lower():
+                raise
+            print(
+                f"⚠️  Your installed DeepLabCut has an internal bug constructing its W&B "
+                f"logger ({e}) — disabling W&B logging for this run and continuing "
+                f'without it. Run `pip install -U "deeplabcut[wandb]"` to fix this properly.'
+            )
+            updates = {k: v for k, v in updates.items() if k != "logger"}
+
+    # Remediation attempts exhausted — one last try, letting any error propagate normally.
+    return deeplabcut.train_network(str(project_config), pytorch_cfg_updates=updates, **train_kwargs)
