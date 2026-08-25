@@ -1,10 +1,6 @@
 import yaml
-from dataclasses import dataclass, asdict, field
-from datetime import date as _date, datetime
+from dataclasses import dataclass, asdict
 from pathlib import Path
-
-import deeplabcut
-from deeplabcut.utils import auxiliaryfunctions
 
 
 # ────────────────────────────────────────────────────────────────────────

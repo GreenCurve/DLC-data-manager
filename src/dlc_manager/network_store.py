@@ -1,6 +1,6 @@
 """
-Network_Store_Module.py
-─────────────────────────
+network_store.py
+─────────────────
 Consumer side of the pipeline: a store of independent DeepLabCut 2D
 projects. Each project is a normal, trainable DLC project — just built
 from copied labeled-data instead of by pointing DLC at real videos.
@@ -50,19 +50,18 @@ Design
 
 3) create_train_dataset() / train_network() are thin wrappers around
    deeplabcut.create_training_dataset() / deeplabcut.train_network(),
-   pinned to the pytorch engine, with defaults matching your existing
-   4_create_train_dataset_2d.py / 5_network_train_2d.py.
+   pinned to the pytorch engine.
 
 Usage
 ─────
-    from Network_Store_Module import (
+    from dlc_manager import (
         create_project, add_labeled_data, create_train_dataset, train_network,
     )
 
-    project_config = create_project(Setup.NETWORK_STORE, name="mitten_tracker")
+    project_config = create_project(project.network_store, name="mitten_tracker")
 
-    add_labeled_data(project_config, r"...\\frames_store\\labeled-data\\HDMI-A__default")
-    add_labeled_data(project_config, r"...\\frames_store\\labeled-data\\HDMI-A__dense")
+    add_labeled_data(project_config, r".../frames_store/labeled-data/HDMI-A__default")
+    add_labeled_data(project_config, r".../frames_store/labeled-data/HDMI-A__dense")
 
     create_train_dataset(project_config)
     train_network(project_config, epochs=600)
@@ -334,8 +333,7 @@ def train_network(
     pytorch_cfg_updates=None,
     **kwargs,
 ):
-    """Wraps deeplabcut.train_network(), pinned to Engine.PYTORCH, with the
-    same defaults as your existing 5_network_train_2d.py."""
+    """Wraps deeplabcut.train_network(), pinned to Engine.PYTORCH."""
     return deeplabcut.train_network(
         str(project_config),
         shuffle=shuffle,

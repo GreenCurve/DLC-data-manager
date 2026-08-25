@@ -87,7 +87,7 @@ numexpr==2.14.2
 numpy==1.26.4
 opencv-python==4.11.0.86
 opencv-python-headless==4.11.0.86
-packaging @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_packaging_1785888127/work
+packaging==26.3
 pandas==2.3.3
 parso==0.8.7
 partd==1.4.2
@@ -120,7 +120,6 @@ pytest==9.1.1
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.3
 pytz==2026.3.post1
-pywin32==312
 PyYAML==6.0.3
 pyzmq==27.2.0
 QDarkStyle==3.2.3

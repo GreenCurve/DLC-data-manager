@@ -16,10 +16,6 @@ dependencies:
   - python=3.11.15
   - setuptools=84.0.0
   - tk=8.6.13
-  - ucrt=10.0.26100.0
-  - vc=14.5
-  - vc14_runtime=14.51.36247
-  - vcomp14=14.51.36247
   - wheel=0.48.0
   - pip:
       - albumentations==1.4.3
@@ -143,7 +139,6 @@ dependencies:
       - python-dateutil==2.9.0.post0
       - python-dotenv==1.2.3
       - pytz==2026.3.post1
-      - pywin32==312
       - pyyaml==6.0.3
       - pyzmq==27.2.0
       - qdarkstyle==3.2.3
@@ -187,4 +182,3 @@ dependencies:
       - wcwidth==0.8.2
       - wrapt==2.3.0
       - zipp==4.1.0
-prefix: C:\Users\Egor\anaconda3\envs\DLC

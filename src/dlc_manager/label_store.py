@@ -43,12 +43,21 @@ Design (v2)
    from which raw data, extracted how" is always answerable without
    touching DLC or walking folders by hand.
 
+4) extract_frames_for_video() also accepts a FOLDER instead of a single
+   video file. When given a folder, it recurses through it, finds every
+   video file inside (any extension in VIDEO_EXTENSIONS, at any depth), and
+   calls itself on each one individually — each video still gets its own
+   auto-generated frame-set folder and its own manifest entry, exactly as
+   if you'd called extract_frames_for_video() on it directly. Because each
+   video needs its own folder_id, an explicit folder_name can't be combined
+   with a folder input.
+
 Videos are NEVER copied or symlinked into the store — video_sets just points
 at wherever the raw video already lives.
 
 Usage
 ─────
-    from label_store import (
+    from dlc_manager import (
         init_store, extract_frames_for_video, init_labeling_config,
         label_frames_for, ExtractionConfig, save_extraction_config, list_extractions,
     )
@@ -72,6 +81,13 @@ Usage
     extract_frames_for_video(store_path, "/raw_videos/HDMI-A.mp4", config_name="dense", folder_name="HDMI-A_run3")
     # -> labeled-data/HDMI-A_run3/labeled-data/HDMI-A/*.png
 
+    # Point at a whole folder of raw videos instead of a single file -> each
+    # video inside (recursively) gets extracted on its own:
+    extract_frames_for_video(store_path, "/raw_videos/session_07/")
+    # -> labeled-data/HDMI-A__default/labeled-data/HDMI-A/*.png
+    # -> labeled-data/HDMI-B__default/labeled-data/HDMI-B/*.png
+    # -> ...
+
     # See what's been extracted:
     list_extractions(store_path)
 
@@ -88,17 +104,22 @@ Usage
 
 import inspect
 import shutil
-import yaml
-from dataclasses import dataclass, asdict, field
-from datetime import date as _date, datetime
+from datetime import date as _date
 from pathlib import Path
 
 import deeplabcut
 from deeplabcut.utils import auxiliaryfunctions
 
-import Extraction_config_Module
-import Manifest_Module
+from . import extraction_config as extraction_config_module
+from . import manifest as manifest_module
 
+
+# Recognized video file extensions when extract_frames_for_video() is given
+# a folder instead of a single video (matched case-insensitively).
+VIDEO_EXTENSIONS = {
+    ".mp4", ".avi", ".mov", ".mkv", ".flv", ".wmv",
+    ".m4v", ".mpg", ".mpeg", ".webm", ".asf",
+}
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -120,12 +141,14 @@ def init_store(store_path, **default_extraction_overrides):
     (store_path / "labeled-data").mkdir(parents=True, exist_ok=True)
     (store_path / "extraction_configs").mkdir(parents=True, exist_ok=True)
 
-    if not Manifest_Module._manifest_path(store_path).exists():
-        Manifest_Module._save_manifest(store_path, {"extractions": {}})
+    if not manifest_module._manifest_path(store_path).exists():
+        manifest_module._save_manifest(store_path, {"extractions": {}})
 
-    default_path = Extraction_config_Module._extraction_configs_dir(store_path) / "default.yaml"
+    default_path = extraction_config_module._extraction_configs_dir(store_path) / "default.yaml"
     if not default_path.exists():
-        Extraction_config_Module.save_extraction_config(store_path, Extraction_config_Module.ExtractionConfig(name="default", **default_extraction_overrides))
+        extraction_config_module.save_extraction_config(
+            store_path, extraction_config_module.ExtractionConfig(name="default", **default_extraction_overrides)
+        )
         print(f"✅ Store initialized: {store_path}")
     else:
         print(f"⏭  Store already initialized: {store_path}")
@@ -176,6 +199,15 @@ def _next_available_folder_id(store_path, base_id):
     return candidate
 
 
+def _find_videos_in_folder(folder_path):
+    """All files under folder_path (recursively) whose extension matches
+    VIDEO_EXTENSIONS, sorted for deterministic ordering."""
+    return sorted(
+        p for p in folder_path.rglob("*")
+        if p.is_file() and p.suffix.lower() in VIDEO_EXTENSIONS
+    )
+
+
 def extract_frames_for_video(store_path, video_path, config_name="default", folder_name=None, overwrite=False):
     """Extract frames for one (video, extraction_config) call into its own
     nested mini-project:
@@ -190,6 +222,15 @@ def extract_frames_for_video(store_path, video_path, config_name="default", fold
     want repeated kmeans/uniform passes over the same source to sample
     different frames.
 
+    video_path may also be a FOLDER. In that case this recurses through the
+    folder (including subfolders), finds every file whose extension is in
+    VIDEO_EXTENSIONS, and calls extract_frames_for_video() on each one in
+    turn with the same config_name/overwrite. folder_name can't be combined
+    with a folder input (each discovered video needs its own auto-generated
+    folder_id) — pass folder_name only when video_path is a single file.
+    Returns a dict of {video_path: config.yaml path} instead of a single
+    path in this case.
+
     folder_name:
         - Omitted (default): folder_id auto-increments off
           "<video_stem>__<config_name>" — first call gets that exact name,
@@ -203,11 +244,35 @@ def extract_frames_for_video(store_path, video_path, config_name="default", fold
     folder_id. Returns the new project's config.yaml path.
     """
     store_path = Path(store_path).resolve()
-    video_path = str(Path(video_path).resolve())
+    input_path = Path(video_path).resolve()
+
+    if input_path.is_dir():
+        if folder_name is not None:
+            raise ValueError(
+                "folder_name can't be used when video_path points to a folder — "
+                "each video found inside needs its own auto-generated folder_id. "
+                "Omit folder_name (or call extract_frames_for_video() per file "
+                "if you need explicit names)."
+            )
+        video_files = _find_videos_in_folder(input_path)
+        if not video_files:
+            raise FileNotFoundError(
+                f"No video files (looked for {sorted(VIDEO_EXTENSIONS)}) found "
+                f"under folder: {input_path}"
+            )
+        results = {}
+        for vf in video_files:
+            print(f"📁 {vf.relative_to(input_path)}")
+            results[str(vf)] = extract_frames_for_video(
+                store_path, vf, config_name=config_name, overwrite=overwrite
+            )
+        return results
+
+    video_path = str(input_path)
     if not Path(video_path).is_file():
         raise FileNotFoundError(f"Video not found: {video_path}")
 
-    ex_cfg = Extraction_config_Module.load_extraction_config(store_path, config_name)
+    ex_cfg = extraction_config_module.load_extraction_config(store_path, config_name)
     video_stem = Path(video_path).stem
     base_id = folder_id_for(video_path, ex_cfg.name)
 
@@ -254,7 +319,7 @@ def extract_frames_for_video(store_path, video_path, config_name="default", fold
     if not frames_dir.is_dir():
         raise RuntimeError(f"DLC did not produce the expected frames dir: {frames_dir}")
 
-    Manifest_Module._record_extraction(store_path, folder_id, video_path, video_stem, ex_cfg, frames_dir, project_config_path)
+    manifest_module._record_extraction(store_path, folder_id, video_path, video_stem, ex_cfg, frames_dir, project_config_path)
     frame_count = sum(1 for p in frames_dir.iterdir() if p.suffix == ".png")
     print(f"🎞  Extracted {frame_count} frames → labeled-data/{folder_id}/labeled-data/{video_stem}")
     return project_config_path
