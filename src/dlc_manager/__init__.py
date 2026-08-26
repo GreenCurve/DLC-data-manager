@@ -12,30 +12,42 @@ Installable package for managing a DeepLabCut-based pipeline:
     label_store.py        extraction + labeling, decoupled per frame set.
     network_store.py      independent DLC "network" projects trained from
                            copied labeled-data.
+    inference_store.py     inference runs: video(s) + a trained network
+                           project -> predictions, and optionally a video
+                           with predictions overlaid.
 
 This package contains no project-specific values (no bodyparts, no video
-names, no fixed folder layout beyond raw_videos/frames_store/network_store).
+names, no fixed folder layout beyond
+raw_videos/frames_store/network_store/inference_runs).
 Anything specific to one actual project (e.g. the mitten tracker) belongs in
 a usage script that imports this package — see the examples shipped
 alongside your data project, not in here.
 
-Every label_store/network_store/extraction_config/manifest operation below
-is also available as a method on DataProject (and, for network projects,
-on the NetworkProject handle returned by create_network_project /
-get_network_project), so the common case is just:
+Every label_store/network_store/extraction_config/manifest/inference_store
+operation below is also available as a method on DataProject (and, for
+network projects / inference runs, on the NetworkProject handle returned by
+create_network_project()/get_network_project(), or the InferenceRun handle
+returned by create_inference_run()/get_inference_run()), so the common case
+is just:
 
     import dlc_manager as dlm
     prj = dlm.init_data_project(r"/home/ccldlc/Desktop/DLC_project/")
     prj.extract_frames_for_video(r"/raw_videos/HDMI-A.mp4")
     net = prj.create_network_project(name="mitten_tracker")
     net.add_labeled_data(prj.frame_set_path("HDMI-A__default"))
+    net.create_train_dataset()
+    net.train_network(epochs=600)
+
+    run = prj.create_inference_run(network=net, videos=r"/raw_videos/HDMI-B.mp4")
+    run.analyze_videos()
+    run.create_labeled_video()
 
 The free functions imported below still work standalone (store_path /
 project_config passed explicitly) for anyone who prefers that, or needs to
 operate on a store/project without a full DataProject around it.
 """
 
-from .project import DataProject, NetworkProject, init_data_project
+from .project import DataProject, NetworkProject, InferenceRun, init_data_project
 
 from .extraction_config import (
     ExtractionConfig,
@@ -67,9 +79,20 @@ from .network_store import (
     list_labeled_data,
 )
 
+from .inference_store import (
+    create_run,
+    analyze_videos,
+    create_labeled_video,
+    list_runs,
+    get_run,
+    list_predictions,
+    list_labeled_videos,
+)
+
 __all__ = [
     "DataProject",
     "NetworkProject",
+    "InferenceRun",
     "init_data_project",
     "ExtractionConfig",
     "save_extraction_config",
@@ -89,4 +112,11 @@ __all__ = [
     "create_train_dataset",
     "train_network",
     "list_labeled_data",
+    "create_run",
+    "analyze_videos",
+    "create_labeled_video",
+    "list_runs",
+    "get_run",
+    "list_predictions",
+    "list_labeled_videos",
 ]

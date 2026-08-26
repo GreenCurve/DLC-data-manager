@@ -38,6 +38,8 @@ from . import label_store as label_store_module
 from . import network_store as network_store_module
 from . import extraction_config as extraction_config_module
 from . import manifest as manifest_module
+from . import inference_store as inference_store_module
+from .inference_store import InferenceRun
 
 
 PROJECT_CONFIG_FILENAME = "project_config.yaml"
@@ -130,11 +132,18 @@ class DataProject:
                                    — each one accessed via a NetworkProject
                                    handle (see create_network_project /
                                    get_network_project).
+            inference_runs/        inference_store territory: runs that bind
+                                   raw video(s) to a trained network project
+                                   and hold the resulting predictions / labeled
+                                   video — each one accessed via an
+                                   InferenceRun handle (see
+                                   create_inference_run / get_inference_run).
     """
     root: Path
     raw_videos: Path
     store: Path
     network_store: Path
+    inference_runs: Path
 
     # ---------------------------------------------------------------
     # project-level metadata (project_config.yaml at the root)
@@ -237,16 +246,54 @@ class DataProject:
             p.name for p in self.network_store.iterdir() if (p / "config.yaml").exists()
         )
 
+    # ---------------------------------------------------------------
+    # inference_runs: video(s) + a trained network project -> predictions
+    # (and, optionally, a labeled video) (inference_store.py)
+    # ---------------------------------------------------------------
+
+    def create_inference_run(self, network, videos, name=None, shuffle=1, **overrides) -> InferenceRun:
+        """Bind video(s) to a trained network project as a new inference
+        run. Nothing is analyzed yet — call .analyze_videos() on the
+        returned handle next.
+
+        network: a NetworkProject handle (e.g. from create_network_project()
+            / get_network_project()) or a network project's config.yaml
+            path directly.
+        videos: a single video file, a folder (recursed for anything in
+            VIDEO_EXTENSIONS), or a list mixing either.
+        """
+        run_dir = inference_store_module.create_run(
+            self.inference_runs, network, videos, name=name, shuffle=shuffle, **overrides
+        )
+        return InferenceRun(run_dir=run_dir)
+
+    def get_inference_run(self, run_id) -> InferenceRun:
+        """Reload a handle onto an inference run created earlier (in this
+        or an earlier session) by its run_id (the run's folder name)."""
+        run_dir = self.inference_runs / run_id
+        if not run_dir.is_dir():
+            raise FileNotFoundError(
+                f"No inference run named '{run_id}' under {self.inference_runs}. "
+                f"Known: {self.list_inference_runs()}"
+            )
+        return InferenceRun(run_dir=run_dir)
+
+    def list_inference_runs(self):
+        """run_id -> manifest record for every inference run so far."""
+        return inference_store_module.list_runs(self.inference_runs)
+
 
 def init_data_project(root_dir, **metadata) -> DataProject:
     """Bootstrap (or just resolve, if it already exists) a data project's
     top-level folder layout under root_dir.
 
-    Creates raw_videos/, frames_store/, and network_store/ if they don't
-    already exist, and bootstraps frames_store/ (labeled-data/,
-    extraction_configs/ with a 'default' preset, manifest.yaml) right away
-    — no separate init_store() call needed. network_store/ project(s) are
-    still created on demand, via prj.create_network_project().
+    Creates raw_videos/, frames_store/, network_store/, and
+    inference_runs/ if they don't already exist, and bootstraps
+    frames_store/ (labeled-data/, extraction_configs/ with a 'default'
+    preset, manifest.yaml) and inference_runs/ (its own manifest.yaml)
+    right away — no separate init_store() call needed. network_store/
+    project(s) and inference_runs/ run(s) are still created on demand, via
+    prj.create_network_project() / prj.create_inference_run().
 
     Also creates (or reads) project_config.yaml at the root, which holds
     this DataProject's own high-level metadata — a free-form dict, set via
@@ -263,11 +310,13 @@ def init_data_project(root_dir, **metadata) -> DataProject:
     raw_videos = root / "raw_videos"
     store = root / "frames_store"
     network_store = root / "network_store"
+    inference_runs = root / "inference_runs"
 
-    for d in (raw_videos, store, network_store):
+    for d in (raw_videos, store, network_store, inference_runs):
         d.mkdir(parents=True, exist_ok=True)
 
     label_store_module.init_store(store)
+    inference_store_module.init_store(inference_runs)
 
     cfg = _load_project_config(root)
     if cfg is None:
@@ -285,4 +334,5 @@ def init_data_project(root_dir, **metadata) -> DataProject:
         raw_videos=raw_videos,
         store=store,
         network_store=network_store,
+        inference_runs=inference_runs,
     )
