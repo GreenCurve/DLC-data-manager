@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dlc_manager"
+version = "0.1.0"
+description = "Project-centered manager for DeepLabCut extraction/label/network/inference pipelines"
+requires-python = ">=3.11"
+dependencies = [
+    "pyyaml==6.0.3",
+    "pandas==2.3.3",
+    "pydantic==2.14.0b1",   # pre-release — install with `pip install --pre` or it won't resolve
+    "wandb==0.28.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==9.1.1"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: slow tests that run real DeepLabCut against real video data",
+]
