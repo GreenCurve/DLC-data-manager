@@ -1,19 +1,31 @@
-# DLC data managenet
+# DLC data manager
 
-## Installation
+## Quickstart
 
-1. Install DeepLabCut first, following the official instructions for your
-   platform/GPU: https://deeplabcut.github.io/DeepLabCut/docs/installation.html
-   (this pulls in torch, torchvision, and the right CUDA build for your machine —
-   pinning it inside this package would conflict with that).
+**1. Install DeepLabCut** (GPU/platform-specific, do this first):
 
-   On this project's dev machine: `deeplabcut==3.0.1`, `torch==2.13.0`,
-   `torchvision==0.28.0`, CUDA 13.x via `nvidia-cudnn-cu13`/`nvidia-cublas`.
-   A full snapshot of that environment is in `environment-lock.yml`
-   (`conda env create -f environment-lock.yml`) if you want an exact match
-   rather than a fresh DLC install.
+```bash
+pip install 'deeplabcut[gui]'   # local machine — needed for labeling
+pip install deeplabcut          # Colab / headless — training & inference only
+```
 
-2. Then install dlc_manager itself:
+**2. Install dlc_manager:**
 
-   pip install --pre git+https://github.com/you/dlc_manager.git
+```bash
+pip install --pre git+https://github.com/GreenCurve/DLC-data-manager.git
+```
 
+(`--pre` is required — pins a pydantic pre-release.)
+
+**3. (Optional) W&B logging:**
+
+```bash
+wandb login
+```
+
+In Colab, use a Secrets-panel API key instead — see Colab notes below.
+
+---
+
+Exact dev-machine environment (`deeplabcut==3.0.1`, `torch==2.13.0`, CUDA 13.x):
+`conda env create -f environment-lock.yml`
