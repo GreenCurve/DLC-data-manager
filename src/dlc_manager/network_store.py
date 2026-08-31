@@ -554,3 +554,10 @@ def train_network(
 
     # Remediation attempts exhausted — one last try, letting any error propagate normally.
     return deeplabcut.train_network(str(project_config), pytorch_cfg_updates=updates, **train_kwargs)
+    
+def evaluate_network(project_config, shuffle=1, per_keypoint_evaluation=True, plotting=False, **kwargs):
+    """Wraps deeplabcut.evaluate_network(), pinned to Engine.PYTORCH."""
+    return deeplabcut.evaluate_network(
+        str(project_config), Shuffles=[shuffle], engine=Engine.PYTORCH,
+        per_keypoint_evaluation=per_keypoint_evaluation, plotting=plotting, **kwargs,
+    )

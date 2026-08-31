@@ -105,6 +105,12 @@ class NetworkProject:
             **kwargs,
         )
 
+    def evaluate_network(self, shuffle=1, per_keypoint_evaluation=True, **kwargs):
+        return network_store_module.evaluate_network(
+            self.config_path, shuffle=shuffle,
+            per_keypoint_evaluation=per_keypoint_evaluation, **kwargs,
+        )
+
     def list_labeled_data(self):
         return network_store_module.list_labeled_data(self.config_path)
 
@@ -216,6 +222,42 @@ class DataProject:
         """Path to a frame set's own folder under frames_store/labeled-data/
         <folder_id> — e.g. to hand to a NetworkProject.add_labeled_data()."""
         return self.store / "labeled-data" / folder_id
+
+    def frame_set_training_usage(self, folder_id):
+        """Names of every network project (under network_store/) that this
+        frame set has been copied into via add_labeled_data(). Empty list
+        if it's never been used for training."""
+        used_by = []
+        for name in self.list_network_projects():
+            copied = network_store_module.list_labeled_data(self.network_store / name / "config.yaml")
+            if any(entry.get("folder_id") == folder_id for entry in copied):
+                used_by.append(name)
+        return used_by
+
+    def delete_frame_set(self, folder_id, force=False):
+        """Delete a frame set (labeled-data/<folder_id> + its manifest.yaml
+        entry) — see label_store.delete_frame_set() for the on-disk/
+        manifest mechanics.
+
+        On top of that function's own labeled-data check, this also checks
+        whether the frame set has already been copied into a network_store
+        project (i.e. used for training, via add_labeled_data()). If so,
+        deletion is refused unless force=True — the frame set's OWN
+        folder_id-only copy inside that network project is untouched
+        either way (it's an independent copy, not a link), but you'd
+        otherwise be deleting the source of a trained model's data without
+        any record of it happening.
+        """
+        used_by = self.frame_set_training_usage(folder_id)
+        if used_by and not force:
+            raise ValueError(
+                f"Frame set '{folder_id}' has been used for training in "
+                f"network project(s): {used_by}. Pass force=True to delete "
+                f"it from frames_store/ anyway (this will NOT remove it "
+                f"from those network projects — their copies are "
+                f"independent)."
+            )
+        return label_store_module.delete_frame_set(self.store, folder_id, force=force)
 
     # ---------------------------------------------------------------
     # network_store: independent DLC projects (network_store.py)

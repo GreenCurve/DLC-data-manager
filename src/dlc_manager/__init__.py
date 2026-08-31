@@ -68,6 +68,7 @@ from .label_store import (
     label_frames_for,
     import_legacy_project,
     folder_id_for,
+    delete_frame_set,
     VIDEO_EXTENSIONS,
 )
 
@@ -106,6 +107,7 @@ __all__ = [
     "label_frames_for",
     "import_legacy_project",
     "folder_id_for",
+    "delete_frame_set",
     "VIDEO_EXTENSIONS",
     "create_project",
     "add_labeled_data",

@@ -494,6 +494,70 @@ def import_legacy_project(store_path, dlc_project_root, raw_videos_root, config_
 
 
 # ────────────────────────────────────────────────────────────────────────
+# Deletion — remove a frame set folder AND its manifest entry together
+# ────────────────────────────────────────────────────────────────────────
+
+def delete_frame_set(store_path, folder_id, force=False):
+    """Permanently delete one frame-set folder (labeled-data/<folder_id>)
+    on disk AND its manifest.yaml entry, together, so the two can never
+    drift out of sync (a bare `shutil.rmtree()` on the folder would leave a
+    dangling manifest record; a hand-edit of manifest.yaml would leave the
+    folder orphaned on disk).
+
+    Refuses to delete a frame set that's already labeled (has a
+    CollectedData_<scorer>.h5 anywhere under it) unless force=True, since
+    that's usually real labeling work you don't want to lose by accident.
+    Pass force=True to delete anyway (e.g. a known-bad or superseded pass).
+
+    This function only knows about this one frames_store — it does NOT
+    check whether the frame set has already been copied into a
+    network_store project via add_labeled_data(). Deleting it here won't
+    touch any copy that already lives inside a network project (those are
+    independent copies, not links), but if you're operating through a
+    DataProject, prefer DataProject.delete_frame_set() instead — it also
+    warns/blocks when the frame set has been used for training, since that
+    's the more common footgun.
+
+    Tolerant of partial state: safe to call when the folder exists on disk
+    but has no manifest entry, or vice versa (e.g. after a crash mid-
+    extraction) — cleans up whichever side is actually present.
+
+    Raises KeyError if folder_id exists on neither disk nor in the
+    manifest.
+    """
+    store_path = Path(store_path).resolve()
+    project_dir = store_path / "labeled-data" / folder_id
+
+    manifest = manifest_module._load_manifest(store_path)
+    extractions = manifest.setdefault("extractions", {})
+    in_manifest = folder_id in extractions
+    on_disk = project_dir.exists()
+
+    if not on_disk and not in_manifest:
+        raise KeyError(
+            f"No frame set '{folder_id}' found on disk or in manifest.yaml "
+            f"under {store_path}. Known: {list(extractions)}"
+        )
+
+    if on_disk:
+        has_labels = any(project_dir.rglob("CollectedData_*.h5"))
+        if has_labels and not force:
+            raise ValueError(
+                f"labeled-data/{folder_id} contains labeled data "
+                f"(CollectedData_*.h5) — refusing to delete. Pass "
+                f"force=True if you're sure you want to lose this labeling "
+                f"work."
+            )
+        shutil.rmtree(project_dir)
+
+    if in_manifest:
+        del extractions[folder_id]
+        manifest_module._save_manifest(store_path, manifest)
+
+    print(f"🗑  Deleted frame set: labeled-data/{folder_id} (disk={on_disk}, manifest={in_manifest})")
+
+
+# ────────────────────────────────────────────────────────────────────────
 # Labeling schema — set PER frame set, once you're ready to label it
 # ────────────────────────────────────────────────────────────────────────
 
