@@ -1,29 +1,74 @@
 # DLC data manager
 
-## Quickstart
+## Quickstart — using the package
 
 **1. Install DeepLabCut** (GPU/platform-specific, do this first):
-
-```bash
+```
 pip install 'deeplabcut[gui]'   # local machine — needed for labeling
 pip install deeplabcut          # Colab / headless — training & inference only
 ```
 
 **2. Install dlc_manager:**
-
-```bash
+```
 pip install --pre git+https://github.com/GreenCurve/DLC-data-manager.git
 ```
-
 (`--pre` is required — pins a pydantic pre-release.)
 
 **3. (Optional) W&B logging:**
-
-```bash
+```
 wandb login
 ```
-
 In Colab, use a Secrets-panel API key instead — see Colab notes below.
+
+---
+
+## Quickstart — developing / testing the package
+
+**1. Install DeepLabCut** (same as above):
+```
+pip install 'deeplabcut[gui]'
+```
+
+**2. Clone the repo and install editable, with dev deps:**
+```
+git clone https://github.com/GreenCurve/DLC-data-manager.git
+cd DLC-data-manager
+pip install --pre -e ".[dev]"
+```
+(`-e` so edits under `src/dlc_manager` take effect immediately without reinstalling; `--pre` for the pydantic pin as above; `[dev]` pulls in pytest.)
+
+**3. Run the tests**, which call real `deeplabcut.extract_frames()` against actual video:
+```
+pytest tests/test_extraction_sequence.py -v -s
+```
+This needs a real video at `data/raw_videos/<name>.mp4`; without one, these tests skip themselves automatically.
+
+If one person is doing both roles: quickstart 2 is a superset of quickstart 1 (same DeepLabCut install, then a different package-install step), so just use quickstart 2.
+
+---
+
+## Updating a production install after a dev change
+
+Because production installs the package straight from git (`pip install --pre git+...`) rather than from a versioned index like PyPI, `pip install --upgrade` alone is **not reliable** here: pip decides whether a reinstall is needed by comparing the package version (`0.1.0` in `pyproject.toml`), and if that version string hasn't changed since the last install, pip may silently keep the old code even though the commit on `main` is newer.
+
+**Safest one-liner, always gets the latest `main`:**
+```
+pip install --pre --force-reinstall --no-deps git+https://github.com/GreenCurve/DLC-data-manager.git
+```
+- `--force-reinstall` skips pip's "is this version already satisfied?" check and reinstalls regardless.
+- `--no-deps` avoids re-resolving/reinstalling `pyyaml`/`pandas`/`pydantic`/`wandb` unnecessarily — drop it if a dependency version has also changed.
+
+**Verify what actually got installed:**
+```
+pip freeze | grep dlc_manager
+```
+For a git install this prints the exact commit hash it resolved to (e.g. `dlc_manager @ git+https://github.com/GreenCurve/DLC-data-manager.git@<sha>`), so you can confirm it matches the commit you expect to be on `main`.
+
+**More reproducible alternative — pin to a tag or commit instead of `main`:**
+```
+pip install --pre git+https://github.com/GreenCurve/DLC-data-manager.git@<tag-or-commit-sha>
+```
+This is worth doing once a change is confirmed working in dev: tag the commit (`git tag v0.2.0 && git push --tags`), bump `version` in `pyproject.toml` to match, and point prod installs at that tag. Then a plain `pip install --pre --upgrade git+...@v0.2.0` behaves predictably, and anyone can tell from `pip freeze` exactly which release prod is running — rather than everyone being on a floating, unlabeled `main`.
 
 ---
 
@@ -51,17 +96,13 @@ The tables below document the `DataProject` / `NetworkProject` / `InferenceRun` 
 
 ### Handles
 
-[#handles](#handles)
-
 | Constructor | Description |
 | --- | --- |
-| **dlm.init_data_project**(*root_dir*, [**\*\*metadata*]) | Bootstraps (or just resolves, if it already exists) a data project's folder layout — `raw_videos/`, `frames_store/`, `network_store/`, `inference_runs/`, plus `project_config.yaml` — under `root_dir`. Idempotent, safe to call on every run of a usage script. `**metadata` is merged into `project_config.yaml`'s free-form metadata dict. Returns a **`DataProject`**. |
+| **dlm.init_data_project**(*root_dir*, [**metadata]) | Bootstraps (or just resolves, if it already exists) a data project's folder layout — `raw_videos/`, `frames_store/`, `network_store/`, `inference_runs/`, plus `project_config.yaml` — under `root_dir`. Idempotent, safe to call on every run of a usage script. `**metadata` is merged into `project_config.yaml`'s free-form metadata dict. Returns a **`DataProject`**. |
 | **prj.create_network_project**(...) | See [Network projects](#network-projects) below. Returns a **`NetworkProject`** handle. |
 | **prj.create_inference_run**(...) | See [Inference runs](#inference-runs) below. Returns an **`InferenceRun`** handle. |
 
 ### Project metadata
-
-[#project-metadata](#project-metadata)
 
 | Method | Description |
 | --- | --- |
@@ -70,8 +111,6 @@ The tables below document the `DataProject` / `NetworkProject` / `InferenceRun` 
 | **prj.set_metadata**(*key*, *value*) | Persists one metadata key onto `project_config.yaml`, merging with whatever's already saved. |
 
 ### Extraction configs
-
-[#extraction-configs](#extraction-configs)
 
 `ExtractionConfig` is a versioned, named preset holding exactly what `deeplabcut.extract_frames()` needs — nothing about bodyparts/scorer/skeleton lives here (those are per frame-set, see [Frame extraction & labeling](#frame-extraction--labeling)).
 
@@ -93,22 +132,18 @@ The tables below document the `DataProject` / `NetworkProject` / `InferenceRun` 
 
 ### Frame extraction & labeling
 
-[#frame-extraction--labeling](#frame-extraction--labeling)
-
 Every `(video, extraction_config)` pair gets its own nested mini DLC project under `frames_store/labeled-data/<folder_id>/`, so bodyparts/scorer/skeleton can safely differ per frame set. Extraction is **not idempotent** — every call creates a brand-new frame folder.
 
 | Method | Description |
 | --- | --- |
 | **prj.extract_frames_for_video**(*video_path*, [*config_name="default"*], [*folder_name*], [*overwrite=False*]) | Extracts frames for one video using the named `ExtractionConfig` preset. `video_path` may also be a folder — every video file found under it (recursively) is extracted individually, and a `{video_path: config.yaml path}` dict is returned instead of a single path. Without `folder_name`, the folder id auto-increments off `<video_stem>__<config_name>` so repeat calls never collide. Records the result in `manifest.yaml`. Returns the new project's `config.yaml` path. |
-| **prj.init_labeling_config**(*folder_id*, *scorer*, *bodyparts*, *skeleton*, [*task*], [**\*\*overrides*]) | Sets the labeling schema — scorer, bodyparts, skeleton — for one frame set, in place. Every other frame set keeps its own schema untouched, which is what lets bodyparts differ across videos. |
+| **prj.init_labeling_config**(*folder_id*, *scorer*, *bodyparts*, *skeleton*, [*task*], [**overrides]) | Sets the labeling schema — scorer, bodyparts, skeleton — for one frame set, in place. Every other frame set keeps its own schema untouched, which is what lets bodyparts differ across videos. |
 | **prj.label_frames_for**(*folder_id*, [*multiple=False*]) | Launches napari pre-loaded with this frame set's images + config (via `deeplabcut.label_frames()`), blocking until the window is closed. `multiple=True` enables multi-individual labeling. Requires `init_labeling_config()` to have been called first. |
 | **prj.import_legacy_project**(*dlc_project_root*, [*config_name="imported"*]) | Imports every labeled frame set from an old, flat (pre-store) DLC project into `frames_store/`, one new frame-set folder per video, matched against this project's own `raw_videos/` by filename stem. Returns `{video_path: config.yaml path}`. |
 | **prj.folder_id_for**(*video_path*, *config_name*) | Utility: the folder id a given video/config pair would produce (`<video_stem>__<config_name>`), before any auto-incrementing. |
 | **prj.frame_set_path**(*folder_id*) | Path to a frame set's own folder, `frames_store/labeled-data/<folder_id>` — handy for passing to `NetworkProject.add_labeled_data()`. |
 
 ### Frame-set inspection & deletion
-
-[#frame-set-inspection--deletion](#frame-set-inspection--deletion)
 
 | Method | Description |
 | --- | --- |
@@ -119,43 +154,37 @@ Every `(video, extraction_config)` pair gets its own nested mini DLC project und
 
 ### Network projects
 
-[#network-projects](#network-projects)
-
 A network project is a normal, trainable DLC project built purely from labeled-data copied out of one or more frame sets — no real video path required.
 
 | Method | Description |
 | --- | --- |
-| **prj.create_network_project**([*name*], [*scorer="Egor"*], [*engine="pytorch"*], [**\*\*overrides*]) | Creates a new, empty DLC project under `network_store/` (without calling `deeplabcut.create_new_project()`). `name` auto-generates as `network-<scorer>-<date>` if omitted; raises `FileExistsError` if given and already taken. `**overrides` can set any DLC config key. Returns a **`NetworkProject`**. |
+| **prj.create_network_project**([*name*], [*scorer="Egor"*], [*engine="pytorch"*], [**overrides]) | Creates a new, empty DLC project under `network_store/` (without calling `deeplabcut.create_new_project()`). `name` auto-generates as `network-<scorer>-<date>` if omitted; raises `FileExistsError` if given and already taken. `**overrides` can set any DLC config key. Returns a **`NetworkProject`**. |
 | **prj.get_network_project**(*name*) | Reloads a `NetworkProject` handle created in this or an earlier session, by name. |
 | **prj.list_network_projects**() | Names of every network project under `network_store/`. |
 | **net.add_labeled_data**(*source_folder*, [*overwrite=False*]) | Copies a `frames_store` frame-set folder (e.g. `prj.frame_set_path("HDMI-A__default")`) wholesale into this project, named after its `folder_id`. The first call on a fresh project adopts the incoming scorer/bodyparts/skeleton as the project's schema; later calls require an exact bodypart match. |
-| **net.create_train_dataset**([*net_type="resnet_50"*], [**\*\*kwargs*]) | Wraps `deeplabcut.create_training_dataset()`, pinned to the pytorch engine. |
-| **net.train_network**([*wandb_project*], [*wandb_run_name*], [*wandb_tags*], [*wandb_image_log_interval*], [**\*\*kwargs*]) | Wraps `deeplabcut.train_network()`, pinned to the pytorch engine (`epochs`, `shuffle`, `batch_size`, `pytorch_cfg_updates`, etc. all pass through via `**kwargs`). Passing `wandb_project` logs the run to Weights & Biases (`pip install "deeplabcut[wandb]"` + `wandb login` first); config fields your installed DLC version doesn't support are dropped automatically with a warning rather than failing the run. |
-| **net.evaluate_network**([*shuffle=1*], [*per_keypoint_evaluation=True*], [**\*\*kwargs*]) | Wraps `deeplabcut.evaluate_network()`, pinned to the pytorch engine. |
+| **net.create_train_dataset**([*net_type="resnet_50"*], [**kwargs]) | Wraps `deeplabcut.create_training_dataset()`, pinned to the pytorch engine. |
+| **net.train_network**([*wandb_project*], [*wandb_run_name*], [*wandb_tags*], [*wandb_image_log_interval*], [**kwargs]) | Wraps `deeplabcut.train_network()`, pinned to the pytorch engine (`epochs`, `shuffle`, `batch_size`, `pytorch_cfg_updates`, etc. all pass through via `**kwargs`). Passing `wandb_project` logs the run to Weights & Biases (`pip install "deeplabcut[wandb]"` + `wandb login` first); config fields your installed DLC version doesn't support are dropped automatically with a warning rather than failing the run. |
+| **net.evaluate_network**([*shuffle=1*], [*per_keypoint_evaluation=True*], [**kwargs]) | Wraps `deeplabcut.evaluate_network()`, pinned to the pytorch engine. |
 | **net.list_labeled_data**() | What's been copied into this project so far: `[{folder_id, video_stem, source_folder, frame_count, copied_at}, ...]`. |
 | **net.name** | Property. The project's folder name. |
 
 ### Inference runs
 
-[#inference-runs](#inference-runs)
-
 An inference run binds one or more raw videos to an already-trained network project and holds whatever that pairing produces — prediction files, and optionally a rendered video with predictions overlaid.
 
 | Method | Description |
 | --- | --- |
-| **prj.create_inference_run**(*network*, *videos*, [*name*], [*shuffle=1*], [**\*\*overrides*]) | Binds video(s) to a trained network project as a new run — nothing is analyzed yet. `network` is a `NetworkProject` handle or a `config.yaml` path; `videos` is a single file, a folder (recursed), or a list mixing either. `**overrides` are merged into every `analyze_videos()` call made against this run by default. Returns an **`InferenceRun`**. |
+| **prj.create_inference_run**(*network*, *videos*, [*name*], [*shuffle=1*], [**overrides]) | Binds video(s) to a trained network project as a new run — nothing is analyzed yet. `network` is a `NetworkProject` handle or a `config.yaml` path; `videos` is a single file, a folder (recursed), or a list mixing either. `**overrides` are merged into every `analyze_videos()` call made against this run by default. Returns an **`InferenceRun`**. |
 | **prj.get_inference_run**(*run_id*) | Reloads an `InferenceRun` handle created in this or an earlier session, by its folder name. |
 | **prj.list_inference_runs**() | `run_id -> manifest record` for every inference run so far. |
-| **run.analyze_videos**([*shuffle*], [*videos*], [**\*\*kwargs*]) | Wraps `deeplabcut.analyze_videos()`, pinned to the pytorch engine, writing prediction files (`.h5`/`.csv`/`.pickle`) into the run's own folder. Defaults to every video the run was created with; records `analyzed_at` in the run's manifest entry. |
-| **run.create_labeled_video**([*shuffle*], [*videos*], [**\*\*kwargs*]) | Wraps `deeplabcut.create_labeled_video()` to render a video with predicted keypoints drawn on it, as `<video_stem>_labeled.mp4`. Requires `analyze_videos()` to have run first for these videos/shuffle — raises `RuntimeError` otherwise. |
+| **run.analyze_videos**([*shuffle*], [*videos*], [**kwargs]) | Wraps `deeplabcut.analyze_videos()`, pinned to the pytorch engine, writing prediction files (`.h5`/`.csv`/`.pickle`) into the run's own folder. Defaults to every video the run was created with; records `analyzed_at` in the run's manifest entry. |
+| **run.create_labeled_video**([*shuffle*], [*videos*], [**kwargs]) | Wraps `deeplabcut.create_labeled_video()` to render a video with predicted keypoints drawn on it, as `<video_stem>_labeled.mp4`. Requires `analyze_videos()` to have run first for these videos/shuffle — raises `RuntimeError` otherwise. |
 | **run.list_predictions**() | Prediction files (`*.h5`) currently in this run's folder. |
 | **run.list_labeled_videos**() | Rendered videos (`*_labeled.mp4`) currently in this run's folder. |
 | **run.record** | Property. Fresh snapshot of this run's manifest entry (`network_project`, `videos`, `shuffle`, `analyzed_at`, ...). |
 | **run.run_id** / **run.store_path** | Properties. The run's folder name, and its parent `inference_runs/` path. |
 
 ### Reports / audit
-
-[#reports--audit](#reports--audit)
 
 `generate_report()` reads a project's `raw_videos/`, `frames_store/`, `network_store/`, and `inference_runs/` straight off disk (no `deeplabcut` import required) and writes a single self-contained HTML page: raw-video distribution across `raw_videos/` subfolders, extraction/labeling coverage per video, bodypart/skeleton config groups (with near-duplicate detection), which frame sets have been used for training, which raw videos have been run through inference, and duplicate raw videos / labeled data / frames.
 
@@ -164,15 +193,12 @@ An inference run binds one or more raw videos to an already-trained network proj
 | **prj.generate_report**([*output*], [*similarity_threshold=0.7*], [*check_frame_duplicates=False*]) | Builds and writes the report. `output` defaults to `<root>/dlm_report.html`. `similarity_threshold` is the Jaccard threshold (on bodyparts) above which two not-identical config groups are flagged as "similar". `check_frame_duplicates=True` also hashes every PNG frame to find byte-identical duplicates (off by default — can be slow on large stores). Returns the report's output `Path`. |
 
 Also runnable straight from the command line, without a `DataProject` at all:
-
-```bash
+```
 python -m dlc_manager.report /path/to/project_root
 python -m dlc_manager.report /path/to/project_root -o report.html --check-frame-duplicates
 ```
 
 ### Standalone functions
-
-[#standalone-functions](#standalone-functions)
 
 Everything above also works without a `DataProject`, by importing the module-level functions directly and passing the relevant store path / config path yourself — useful for scripting against a store in isolation. Each behaves exactly as its `DataProject`/handle counterpart described above.
 
@@ -184,8 +210,3 @@ Everything above also works without a `DataProject`, by importing the module-lev
 | `extraction_config.py` | `ExtractionConfig` (dataclass) · `save_extraction_config(store_path, cfg, overwrite=False)` · `load_extraction_config(store_path, name="default")` · `list_extraction_configs(store_path)` |
 | `manifest.py` | `list_extractions(store_path)` · `get_extraction(store_path, folder_id)` |
 | `report.py` | `generate_report(root, output=None, similarity_threshold=0.7, check_frame_duplicates=False)` · `build_report(root, similarity_threshold, check_frame_duplicates)` (returns the raw data dict, no HTML) · `render_html(data)` (data dict → HTML string) |
-
----
-
-Exact dev-machine environment (`deeplabcut==3.0.1`, `torch==2.13.0`, CUDA 13.x):
-`conda env create -f environment-lock.yml`
