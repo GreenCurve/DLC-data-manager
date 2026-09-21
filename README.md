@@ -199,16 +199,3 @@ Also runnable straight from the command line, without a `DataProject` at all:
 python -m dlc_manager.report /path/to/project_root
 python -m dlc_manager.report /path/to/project_root -o report.html --check-frame-duplicates
 ```
-
-### Standalone functions
-
-Everything above also works without a `DataProject`, by importing the module-level functions directly and passing the relevant store path / config path yourself — useful for scripting against a store in isolation. Each behaves exactly as its `DataProject`/handle counterpart described above.
-
-| Module | Functions |
-| --- | --- |
-| `label_store.py` | `init_store(store_path, **default_extraction_overrides)` · `extract_frames_for_video(store_path, video_path, config_name="default", folder_name=None, overwrite=False)` · `init_labeling_config(store_path, folder_id, scorer, bodyparts, skeleton, task=None, **overrides)` · `label_frames_for(store_path, folder_id, multiple=False)` · `import_legacy_project(store_path, dlc_project_root, raw_videos_root, config_name="imported")` · `folder_id_for(video_path, config_name)` · `delete_frame_set(store_path, folder_id, force=False)` · `VIDEO_EXTENSIONS` (constant set of recognized video file extensions) |
-| `network_store.py` | `create_project(store_path, name=None, scorer="Egor", engine="pytorch", **overrides)` · `add_labeled_data(project_config, source_folder, overwrite=False)` · `create_train_dataset(project_config, net_type="resnet_50", **kwargs)` · `train_network(project_config, shuffle=1, epochs=600, save_epochs=25, display_iters=500, batch_size=24, pytorch_cfg_updates=None, wandb_project=None, wandb_run_name=None, wandb_tags=None, wandb_image_log_interval=None, **kwargs)` · `evaluate_network(project_config, shuffle=1, per_keypoint_evaluation=True, plotting=False, **kwargs)` · `list_labeled_data(project_config)` |
-| `inference_store.py` | `init_store(store_path)` · `create_run(store_path, network_config, videos, name=None, shuffle=1, **overrides)` · `analyze_videos(run_dir, shuffle=None, videos=None, **kwargs)` · `create_labeled_video(run_dir, shuffle=None, videos=None, **kwargs)` · `list_runs(store_path)` · `get_run(store_path, run_id)` · `list_predictions(run_dir)` · `list_labeled_videos(run_dir)` |
-| `extraction_config.py` | `ExtractionConfig` (dataclass) · `save_extraction_config(store_path, cfg, overwrite=False)` · `load_extraction_config(store_path, name="default")` · `list_extraction_configs(store_path)` |
-| `manifest.py` | `list_extractions(store_path)` · `get_extraction(store_path, folder_id)` |
-| `report.py` | `generate_report(root, output=None, similarity_threshold=0.7, check_frame_duplicates=False)` · `build_report(root, similarity_threshold, check_frame_duplicates)` (returns the raw data dict, no HTML) · `render_html(data)` (data dict → HTML string) |
