@@ -4,7 +4,10 @@
 
 **1. Install DeepLabCut** (GPU/platform-specific, do this first):
 ```
-pip install 'deeplabcut[gui]'   # local machine — needed for labeling
+pip install 'deeplabcut[gui]'   # local machine — training & inference & labeling
+```
+OR
+```
 pip install deeplabcut          # Colab / headless — training & inference only
 ```
 
