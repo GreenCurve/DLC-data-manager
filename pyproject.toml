@@ -10,9 +10,9 @@ requires-python = ">=3.11"
 dependencies = [
     "pyyaml==6.0.3",
     "pandas==2.3.3",
-    "pydantic==2.14.0b1", # pre-release — install with `pip install --pre` or it won't resolve
+    "pydantic==2.14.0b1",
     "wandb==0.28.2",
-    "matplotlib>=3.10",
+    "ipython<9",
 ]
 
 [project.optional-dependencies]
