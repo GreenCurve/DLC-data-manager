@@ -115,8 +115,7 @@ The tables below document the `DataProject` / `NetworkProject` / `InferenceRun` 
 
 ### Extraction configs
 
-`ExtractionConfig` is a versioned, named preset holding exactly what `deeplabcut.extract_frames()` needs — nothing about bodyparts/scorer/skeleton lives here (those are per frame-set, see [Frame extraction & labeling](#frame-extraction--labeling)).
-
+`ExtractionConfig` is a versioned, named preset holding exactly what `deeplabcut.extract_frames()` needs.
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | **name** | *str* | `"default"` | Preset name — determines the saved filename, `extraction_configs/<name>.yaml`. |
