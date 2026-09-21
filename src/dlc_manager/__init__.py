@@ -15,6 +15,10 @@ Installable package for managing a DeepLabCut-based pipeline:
     inference_store.py     inference runs: video(s) + a trained network
                            project -> predictions, and optionally a video
                            with predictions overlaid.
+    report.py              audit/visualization: one self-contained HTML
+                           report on a DataProject's raw videos, frame
+                           sets, network projects, and inference runs —
+                           see DataProject.generate_report().
 
 This package contains no project-specific values (no bodyparts, no video
 names, no fixed folder layout beyond
@@ -23,8 +27,8 @@ Anything specific to one actual project (e.g. the mitten tracker) belongs in
 a usage script that imports this package — see the examples shipped
 alongside your data project, not in here.
 
-Every label_store/network_store/extraction_config/manifest/inference_store
-operation below is also available as a method on DataProject (and, for
+Every label_store/network_store/extraction_config/manifest/inference_store/
+report operation below is also available as a method on DataProject (and, for
 network projects / inference runs, on the NetworkProject handle returned by
 create_network_project()/get_network_project(), or the InferenceRun handle
 returned by create_inference_run()/get_inference_run()), so the common case
@@ -41,6 +45,8 @@ is just:
     run = prj.create_inference_run(network=net, videos=r"/raw_videos/HDMI-B.mp4")
     run.analyze_videos()
     run.create_labeled_video()
+
+    prj.generate_report()   # one self-contained HTML audit of the whole project
 
 The free functions imported below still work standalone (store_path /
 project_config passed explicitly) for anyone who prefers that, or needs to
@@ -90,6 +96,12 @@ from .inference_store import (
     list_labeled_videos,
 )
 
+from .report import (
+    generate_report,
+    build_report,
+    render_html,
+)
+
 __all__ = [
     "DataProject",
     "NetworkProject",
@@ -121,4 +133,7 @@ __all__ = [
     "get_run",
     "list_predictions",
     "list_labeled_videos",
+    "generate_report",
+    "build_report",
+    "render_html",
 ]

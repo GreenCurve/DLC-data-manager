@@ -39,6 +39,7 @@ from . import network_store as network_store_module
 from . import extraction_config as extraction_config_module
 from . import manifest as manifest_module
 from . import inference_store as inference_store_module
+from . import report as report_module
 from .inference_store import InferenceRun
 
 
@@ -144,6 +145,10 @@ class DataProject:
                                    video — each one accessed via an
                                    InferenceRun handle (see
                                    create_inference_run / get_inference_run).
+
+    generate_report() (report.py territory) doesn't have its own on-disk
+    folder — it reads across all of the above and writes one self-
+    contained dlm_report.html at the project root by default.
     """
     root: Path
     raw_videos: Path
@@ -323,6 +328,33 @@ class DataProject:
     def list_inference_runs(self):
         """run_id -> manifest record for every inference run so far."""
         return inference_store_module.list_runs(self.inference_runs)
+
+    # ---------------------------------------------------------------
+    # audit / visualization report across the whole project (report.py)
+    # ---------------------------------------------------------------
+
+    def generate_report(self, output=None, similarity_threshold=0.7, check_frame_duplicates=False):
+        """Build a single self-contained HTML audit report covering this
+        project's raw videos, frame sets, config groups, network-project
+        training usage, and inference-run usage — see report.py for what
+        each section covers.
+
+        output: defaults to "<root>/dlm_report.html"; pass a path to write
+            it elsewhere instead.
+        check_frame_duplicates: also hash every PNG frame to find byte-
+            identical duplicates — off by default, can be slow on large
+            stores.
+
+        Returns the report's output Path. This is the recommended way to
+        generate a report; report.generate_report() (or the CLI,
+        `python -m dlc_manager.report`) works the same way against a
+        project root without a DataProject handle.
+        """
+        return report_module.generate_report(
+            self.root, output=output,
+            similarity_threshold=similarity_threshold,
+            check_frame_duplicates=check_frame_duplicates,
+        )
 
 
 def init_data_project(root_dir, **metadata) -> DataProject:

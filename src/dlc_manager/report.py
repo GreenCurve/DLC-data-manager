@@ -1,27 +1,55 @@
-#!/usr/bin/env python3
 """
-dlm_visualize.py
-────────────────
-Standalone audit/visualization tool for a dlc_manager DataProject
-(raw_videos/ + frames_store/), producing a single self-contained HTML
-report. Does NOT import deeplabcut / dlc_manager — it reads the on-disk
-YAML/HDF5 files directly, so it's fast and has no heavy dependencies
-beyond pyyaml, matplotlib, and (optionally) pandas+tables for content-level
-duplicate detection of labeled data.
+report.py
+─────────
+Audit/visualization for a DataProject (raw_videos/ + frames_store/, plus
+network_store/ and inference_runs/ if present): produces a single self-
+contained HTML report answering:
 
-Answers:
     1. How raw videos are distributed among subfolders of raw_videos/
     2. How many frame sets (extractions) each raw video has, and how many
        videos-with-data each raw_videos subfolder has
     3. Which frame sets share the same/similar bodyparts+skeleton config
-    4. Duplicate raw videos (byte-identical) and duplicate labeled data
+    4. Which frame sets have been used to train a network project, and
+       which raw videos have been run through an inference run
+    5. Duplicate raw videos (byte-identical) and duplicate labeled data
        (same keypoint content, byte-identical h5, or byte-identical PNGs)
 
-Usage:
-    python dlm_visualize.py /path/to/project_root
-    python dlm_visualize.py /path/to/project_root -o report.html
-    python dlm_visualize.py /path/to/project_root --check-frame-duplicates
-    python dlm_visualize.py /path/to/project_root --similarity-threshold 0.6
+Design
+──────
+1) Deliberately reads the store's on-disk YAML/HDF5 files directly instead
+   of going through label_store.py/network_store.py/inference_store.py (or
+   deeplabcut itself) — so building a report is fast, needs nothing heavier
+   than pyyaml + matplotlib (+ optionally pandas/tables for content-level
+   duplicate detection), and works even against a project on a machine
+   with no deeplabcut install. The trade-off is that a couple of small
+   things (VIDEO_EXTENSIONS, folder-layout conventions) are duplicated here
+   rather than imported from label_store.py, on purpose.
+
+2) build_report() gathers everything into one plain dict; render_html()
+   turns that dict into the HTML/matplotlib report. generate_report() is
+   the one-call convenience that does both and writes the file — that's
+   the function exposed as DataProject.generate_report() and the
+   recommended way to call this module. build_report()/render_html() stay
+   available separately for anyone who wants the raw data (e.g. to feed a
+   notebook) without paying for HTML rendering.
+
+Usage
+─────
+    from dlc_manager import generate_report
+
+    generate_report(r"/home/ccldlc/Desktop/DLC_project/")
+    # -> writes dlm_report.html at the project root, returns its path
+
+    generate_report(project_root, output="audit.html", check_frame_duplicates=True)
+
+    # or, via the DataProject handle (same store paths already filled in):
+    prj.generate_report(check_frame_duplicates=True)
+
+Also runnable from the command line:
+    python -m dlc_manager.report /path/to/project_root
+    python -m dlc_manager.report /path/to/project_root -o report.html
+    python -m dlc_manager.report /path/to/project_root --check-frame-duplicates
+    python -m dlc_manager.report /path/to/project_root --similarity-threshold 0.6
 
 project_root must contain raw_videos/ and frames_store/ (the layout
 init_data_project() creates).
@@ -352,9 +380,15 @@ def build_report(root, similarity_threshold, check_frame_duplicates):
     inference_runs_path = root / "inference_runs"
 
     if not raw_videos_root.is_dir():
-        sys.exit(f"No raw_videos/ folder under {root}")
+        raise FileNotFoundError(
+            f"No raw_videos/ folder under {root} — is this a DataProject root? "
+            f"(see init_data_project())"
+        )
     if not store_path.is_dir():
-        sys.exit(f"No frames_store/ folder under {root}")
+        raise FileNotFoundError(
+            f"No frames_store/ folder under {root} — is this a DataProject root? "
+            f"(see init_data_project())"
+        )
 
     raw_videos = scan_raw_videos(raw_videos_root)
     manifest = load_manifest(store_path)
@@ -679,6 +713,44 @@ inference runs: {len(R['inference_runs'])}</p>
     return "\n".join(parts)
 
 
+# ────────────────────────────────────────────────────────────────────────
+# generate_report() — the one-call, recommended entry point (build +
+# render + write), and what DataProject.generate_report() forwards to
+# ────────────────────────────────────────────────────────────────────────
+
+def generate_report(root, output=None, similarity_threshold=0.7, check_frame_duplicates=False):
+    """Build the audit report for one DataProject root and write it out as
+    a single self-contained HTML file.
+
+    root: a DataProject root — must contain raw_videos/ and frames_store/
+        (the layout init_data_project() creates). Raises FileNotFoundError
+        if either is missing.
+    output: where to write the report.
+        - Omitted (default): "<root>/dlm_report.html".
+        - Given: written there exactly (relative paths are resolved
+          against the current working directory, not root).
+    similarity_threshold: Jaccard threshold (on bodyparts) above which two
+        NOT-identical config groups are flagged as "similar" in section 3
+        of the report.
+    check_frame_duplicates: if True, also hashes every PNG frame under
+        frames_store/ to find byte-identical duplicate frames (section 6).
+        Off by default — can be slow on large stores.
+
+    Returns the report's output Path.
+    """
+    root = Path(root).resolve()
+    data = build_report(root, similarity_threshold, check_frame_duplicates)
+    html = render_html(data)
+
+    output_path = Path(output).resolve() if output is not None else root / "dlm_report.html"
+    output_path.write_text(html, encoding="utf-8")
+    print(f"✅ Report written to {output_path}")
+    if not HAVE_PANDAS:
+        print("⚠  pandas/pytables not available — labeled-data duplicate check fell back to raw byte hashing "
+              "(won't catch relabels under a different scorer name). `pip install pandas tables` for content-level comparison.")
+    return output_path
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("project_root", help="Path to the DataProject root (contains raw_videos/, frames_store/)")
@@ -689,13 +761,14 @@ def main():
                      help="Also hash every PNG frame to find byte-identical duplicate frames (slower)")
     args = ap.parse_args()
 
-    data = build_report(args.project_root, args.similarity_threshold, args.check_frame_duplicates)
-    html = render_html(data)
-    Path(args.output).write_text(html, encoding="utf-8")
-    print(f"✅ Report written to {args.output}")
-    if not HAVE_PANDAS:
-        print("⚠  pandas/pytables not available — labeled-data duplicate check fell back to raw byte hashing "
-              "(won't catch relabels under a different scorer name). `pip install pandas tables` for content-level comparison.")
+    try:
+        generate_report(
+            args.project_root, output=args.output,
+            similarity_threshold=args.similarity_threshold,
+            check_frame_duplicates=args.check_frame_duplicates,
+        )
+    except (FileNotFoundError, ValueError) as e:
+        sys.exit(str(e))
 
 
 if __name__ == "__main__":
