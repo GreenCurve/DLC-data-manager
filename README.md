@@ -125,8 +125,7 @@ The tables below document the `DataProject` / `NetworkProject` / `InferenceRun` 
 
 ### Extraction configs
 
-`ExtractionConfig` is a versioned, named preset holding exactly what `deeplabcut.extract_frames()` needs — nothing about bodyparts/scorer/skeleton lives here (those are per frame-set, see [Frame extraction & labeling](#frame-extraction--labeling)).
-
+`ExtractionConfig` is a versioned, named preset holding exactly what `deeplabcut.extract_frames()` needs.
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | **name** | *str* | `"default"` | Preset name — determines the saved filename, `extraction_configs/<name>.yaml`. |
@@ -223,3 +222,4 @@ Everything above also works without a `DataProject`, by importing the module-lev
 | `extraction_config.py` | `ExtractionConfig` (dataclass) · `save_extraction_config(store_path, cfg, overwrite=False)` · `load_extraction_config(store_path, name="default")` · `list_extraction_configs(store_path)` |
 | `manifest.py` | `list_extractions(store_path)` · `get_extraction(store_path, folder_id)` |
 | `report.py` | `generate_report(root, output=None, similarity_threshold=0.7, check_frame_duplicates=False)` · `build_report(root, similarity_threshold, check_frame_duplicates)` (returns the raw data dict, no HTML) · `render_html(data)` (data dict → HTML string) |
+
