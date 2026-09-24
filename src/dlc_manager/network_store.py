@@ -77,6 +77,7 @@ from datetime import date as _date, datetime
 from pathlib import Path
 
 import deeplabcut
+from deeplabcut.generate_training_dataset.trainingsetmanipulation import merge_annotateddatasets
 from deeplabcut.compat import Engine
 from deeplabcut.utils import auxiliaryfunctions
 from pydantic import ValidationError
@@ -562,6 +563,21 @@ def evaluate_network(project_config, shuffle=1, per_keypoint_evaluation=True, pl
         str(project_config), Shuffles=[shuffle], engine=Engine.PYTORCH,
         per_keypoint_evaluation=per_keypoint_evaluation, plotting=plotting, **kwargs,
     )
+    
+
+
+def _rows_by_folder(project_config):
+    """folder_id -> list of row indices in the merged annotation dataframe,
+    in the same order DLC uses when it builds the train/test split."""
+    cfg = auxiliaryfunctions.read_config(str(project_config))
+    tsf = Path(cfg["project_path"]) / auxiliaryfunctions.get_training_set_folder(cfg)
+    tsf.mkdir(parents=True, exist_ok=True)
+    df = merge_annotateddatasets(cfg, tsf)
+    folders = df.index.get_level_values(-2)   # == folder_id after _relocate_annotation_paths
+    rows = {}
+    for i, f in enumerate(folders):
+        rows.setdefault(f, []).append(i)
+    return rows    
     
 def _resolve(project_config, selectors):
     """folder_ids and/or video stems -> set of folder_ids in this project."""
