@@ -1,0 +1,16 @@
+README.md
+pyproject.toml
+src/dlc_manager/__init__.py
+src/dlc_manager/extraction_config.py
+src/dlc_manager/inference_store.py
+src/dlc_manager/label_store.py
+src/dlc_manager/manifest.py
+src/dlc_manager/network_store.py
+src/dlc_manager/project.py
+src/dlc_manager/report.py
+src/dlc_manager.egg-info/PKG-INFO
+src/dlc_manager.egg-info/SOURCES.txt
+src/dlc_manager.egg-info/dependency_links.txt
+src/dlc_manager.egg-info/requires.txt
+src/dlc_manager.egg-info/top_level.txt
+tests/test_extraction_sequence.py

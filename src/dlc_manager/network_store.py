@@ -67,6 +67,7 @@ Usage
     train_network(project_config, epochs=600)
 """
 
+import random
 import copy
 import re
 import shutil
@@ -561,3 +562,90 @@ def evaluate_network(project_config, shuffle=1, per_keypoint_evaluation=True, pl
         str(project_config), Shuffles=[shuffle], engine=Engine.PYTORCH,
         per_keypoint_evaluation=per_keypoint_evaluation, plotting=plotting, **kwargs,
     )
+    
+def _resolve(project_config, selectors):
+    """folder_ids and/or video stems -> set of folder_ids in this project."""
+    if selectors is None:
+        return set()
+    if isinstance(selectors, str):
+        selectors = [selectors]
+    copied = list_labeled_data(project_config)
+    folder_ids = {c["folder_id"] for c in copied}
+    out = set()
+    for s in selectors:
+        if s in folder_ids:
+            out.add(s)
+            continue
+        matches = {c["folder_id"] for c in copied if c["video_stem"] == s}
+        if not matches:
+            raise ValueError(
+                f"'{s}' matches no folder_id or video_stem. "
+                f"Available folder_ids: {sorted(folder_ids)}"
+            )
+        out |= matches
+    return out
+
+
+def create_train_val_test_dataset(
+    project_config, test, val=None, train=None,
+    val_fraction=0.1, seed=0, net_type="resnet_50", **kwargs,
+):
+    """
+    test:  video stem(s) and/or folder_id(s) held out entirely (required).
+    val:   same kind of selector; if None, val_fraction of the training
+           rows is sampled at random (seeded) instead.
+    train: selector(s); default = every frame set not in test/val.
+    """
+    project_config = Path(project_config).resolve()
+    all_ids = {c["folder_id"] for c in list_labeled_data(project_config)}
+
+    test_ids = _resolve(project_config, test)
+    val_ids = _resolve(project_config, val)
+    train_ids = _resolve(project_config, train) if train is not None \
+        else all_ids - test_ids - val_ids
+
+    if not test_ids:
+        raise ValueError("test is empty.")
+    for a, b, label in [(train_ids, test_ids, "train/test"),
+                        (train_ids, val_ids, "train/val"),
+                        (val_ids, test_ids, "val/test")]:
+        if a & b:
+            raise ValueError(f"{label} overlap: {sorted(a & b)}")
+    if not train_ids:
+        raise ValueError("train is empty after removing test/val.")
+
+    rows = _rows_by_folder(project_config)
+    flat = lambda ids: sorted(i for fid in ids for i in rows.get(fid, []))
+    for fid in train_ids | val_ids | test_ids:
+        if fid not in rows:
+            print(f"⚠️  {fid} has no labeled rows — it contributes nothing.")
+
+    train_rows, test_rows = flat(train_ids), flat(test_ids)
+    if val_ids:
+        val_rows = flat(val_ids)
+    else:
+        rng = random.Random(seed)
+        pool = train_rows[:]
+        rng.shuffle(pool)
+        n_val = max(1, round(len(pool) * val_fraction))
+        val_rows, train_rows = sorted(pool[:n_val]), sorted(pool[n_val:])
+
+    # record the split so evaluation/reporting can reproduce it
+    project_dir = project_config.parent
+    with open(project_dir / "splits.yaml", "w") as f:
+        yaml.safe_dump({
+            "train_folders": sorted(train_ids),
+            "val_folders": sorted(val_ids) or f"random {val_fraction} of train (seed={seed})",
+            "test_folders": sorted(test_ids),
+            "n_rows": {"train": len(train_rows), "val": len(val_rows), "test": len(test_rows)},
+            "shuffles": {"val": 1, "test": 2},
+        }, f, sort_keys=False)
+
+    print(f"Split: train={len(train_rows)}  val={len(val_rows)}  test={len(test_rows)} frames "
+          f"(test = {sorted(test_ids)})")
+
+    return deeplabcut.create_training_dataset(
+        str(project_config), Shuffles=[1, 2],
+        trainIndices=[train_rows, train_rows], testIndices=[val_rows, test_rows],
+        net_type=net_type, engine=Engine.PYTORCH, **kwargs,
+    )    

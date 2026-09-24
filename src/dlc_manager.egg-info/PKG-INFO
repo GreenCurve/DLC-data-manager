@@ -1,0 +1,12 @@
+Metadata-Version: 2.4
+Name: dlc_manager
+Version: 0.1.0
+Summary: Project-centered manager for DeepLabCut extraction/label/network/inference pipelines
+Requires-Python: >=3.11
+Requires-Dist: pyyaml==6.0.3
+Requires-Dist: pandas==2.3.3
+Requires-Dist: pydantic==2.14.0b1
+Requires-Dist: wandb==0.28.2
+Requires-Dist: ipython<9
+Provides-Extra: dev
+Requires-Dist: pytest==9.1.1; extra == "dev"
