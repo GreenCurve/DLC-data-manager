@@ -93,6 +93,33 @@ class NetworkProject:
             self.config_path, net_type=net_type, **kwargs
         )
 
+    def create_train_val_test_dataset(
+        self, test, val=None, train=None, val_fraction=0.1, seed=0,
+        net_type="resnet_50", **kwargs,
+    ):
+        """Three-way split: shuffle 1 = train/val (used for training and
+        snapshot selection), shuffle 2 = same train / a truly held-out test.
+
+        test / val / train: video stem(s) and/or folder_id(s), e.g.
+        test="HDMI-B" holds out every frame set extracted from that video.
+        train defaults to everything not in test/val; if val is None,
+        val_fraction of the training rows is sampled at random (seeded).
+        See network_store.create_train_val_test_dataset().
+        """
+        return network_store_module.create_train_val_test_dataset(
+            self.config_path, test=test, val=val, train=train,
+            val_fraction=val_fraction, seed=seed, net_type=net_type, **kwargs,
+        )
+
+    def evaluate_on_test(self, src_shuffle=1, test_shuffle=2, **kwargs):
+        """Copy the trained snapshots from src_shuffle into test_shuffle and
+        evaluate there, so the reported "test" metrics come from the
+        held-out split. Train src_shuffle first (train_network(shuffle=1)).
+        See network_store.evaluate_on_test()."""
+        return network_store_module.evaluate_on_test(
+            self.config_path, src_shuffle=src_shuffle, test_shuffle=test_shuffle, **kwargs
+        )
+
     def train_network(self, wandb_project=None, wandb_run_name=None, wandb_tags=None, wandb_image_log_interval=None, **kwargs):
         """See network_store.train_network() — pass wandb_project to log
         this run to Weights & Biases (requires `pip install
