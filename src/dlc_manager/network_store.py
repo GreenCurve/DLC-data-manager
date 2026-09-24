@@ -65,10 +65,23 @@ Usage
 
     create_train_dataset(project_config)
     train_network(project_config, epochs=600)
+
+Train / validation / test split
+───────────────────────────────
+DLC's own "test" split is really a validation set (it drives best-snapshot
+selection). For an honest held-out number use:
+
+    create_train_val_test_dataset(project_config, test="HDMI-B")
+    train_network(project_config, shuffle=1)
+    evaluate_network(project_config, shuffle=1)   # train vs. validation
+    evaluate_on_test(project_config)              # train vs. held-out test
+
+Shuffle 1 = train/val; shuffle 2 = same train / held-out test. The split is
+recorded in <project>/splits.yaml.
 """
 
-import random
 import copy
+import random
 import re
 import shutil
 import pandas as pd
@@ -77,8 +90,8 @@ from datetime import date as _date, datetime
 from pathlib import Path
 
 import deeplabcut
-from deeplabcut.generate_training_dataset.trainingsetmanipulation import merge_annotateddatasets
 from deeplabcut.compat import Engine
+from deeplabcut.generate_training_dataset.trainingsetmanipulation import merge_annotateddatasets
 from deeplabcut.utils import auxiliaryfunctions
 from pydantic import ValidationError
 
@@ -563,22 +576,12 @@ def evaluate_network(project_config, shuffle=1, per_keypoint_evaluation=True, pl
         str(project_config), Shuffles=[shuffle], engine=Engine.PYTORCH,
         per_keypoint_evaluation=per_keypoint_evaluation, plotting=plotting, **kwargs,
     )
-    
 
 
-def _rows_by_folder(project_config):
-    """folder_id -> list of row indices in the merged annotation dataframe,
-    in the same order DLC uses when it builds the train/test split."""
-    cfg = auxiliaryfunctions.read_config(str(project_config))
-    tsf = Path(cfg["project_path"]) / auxiliaryfunctions.get_training_set_folder(cfg)
-    tsf.mkdir(parents=True, exist_ok=True)
-    df = merge_annotateddatasets(cfg, tsf)
-    folders = df.index.get_level_values(-2)   # == folder_id after _relocate_annotation_paths
-    rows = {}
-    for i, f in enumerate(folders):
-        rows.setdefault(f, []).append(i)
-    return rows    
-    
+# ────────────────────────────────────────────────────────────────────────
+# Train / validation / test split
+# ────────────────────────────────────────────────────────────────────────
+
 def _resolve(project_config, selectors):
     """folder_ids and/or video stems -> set of folder_ids in this project."""
     if selectors is None:
@@ -602,15 +605,84 @@ def _resolve(project_config, selectors):
     return out
 
 
+def _rows_by_folder(project_config):
+    """folder_id -> list of row indices in the merged annotation dataframe,
+    in the same order DLC uses when it builds the train/test split."""
+    cfg = auxiliaryfunctions.read_config(str(project_config))
+    tsf = Path(cfg["project_path"]) / auxiliaryfunctions.get_training_set_folder(cfg)
+    tsf.mkdir(parents=True, exist_ok=True)
+    df = merge_annotateddatasets(cfg, tsf)
+    folders = df.index.get_level_values(-2)   # == folder_id after _relocate_annotation_paths
+    rows = {}
+    for i, f in enumerate(folders):
+        rows.setdefault(f, []).append(i)
+    return rows
+
+
+def _verify_split(project_config, shuffle, expected_train, expected_test, train_ids, test_ids):
+    """Check DLC's stored split for `shuffle` against what we requested:
+    (1) stored train/test indices equal ours, and (2) the stored training
+    frames come only from train folders — catches a row-ordering mismatch
+    between _rows_by_folder and DLC's own merge.
+
+    A genuine mismatch raises RuntimeError. If the documentation pickle
+    can't be located/parsed at all (layout differs in your DLC version),
+    a warning is printed instead of failing — but then the split is NOT
+    verified.
+    """
+    cfg = auxiliaryfunctions.read_config(str(project_config))
+    tsf = Path(cfg["project_path"]) / auxiliaryfunctions.get_training_set_folder(cfg)
+    pickles = sorted(
+        tsf.glob(f"*/Documentation_data-*shuffle{shuffle}.pickle"),
+        key=lambda p: p.stat().st_mtime,
+    )
+    try:
+        if not pickles:
+            raise FileNotFoundError(f"no documentation pickle for shuffle {shuffle} under {tsf}")
+        data, tr, te, _ = auxiliaryfunctions.load_metadata(str(pickles[-1]))
+
+        def folder_of(entry):
+            img = entry["image"]
+            parts = img.replace("\\", "/").split("/") if isinstance(img, str) else [str(p) for p in img]
+            return parts[-2]
+
+        seen = {folder_of(d) for d in data}
+    except Exception as e:
+        print(f"⚠️  Could not verify split for shuffle {shuffle} ({type(e).__name__}: {e}) "
+              f"— the split was NOT verified.")
+        return
+
+    if sorted(int(i) for i in tr) != sorted(expected_train) or \
+       sorted(int(i) for i in te) != sorted(expected_test):
+        raise RuntimeError(f"Shuffle {shuffle}: DLC's stored indices differ from the requested split.")
+    bad = seen & set(test_ids)
+    stray = seen - set(train_ids)
+    if bad or stray:
+        raise RuntimeError(
+            f"Shuffle {shuffle}: training data contains frames from test/unexpected "
+            f"folders {sorted(bad | stray)} — row ordering mismatch."
+        )
+    print(f"✅ Shuffle {shuffle}: split verified ({len(tr)} train / {len(te)} eval rows)")
+
+
 def create_train_val_test_dataset(
     project_config, test, val=None, train=None,
-    val_fraction=0.1, seed=0, net_type="resnet_50", **kwargs,
+    val_fraction=0.1, seed=0, net_type="resnet_50", verify=True, **kwargs,
 ):
-    """
+    """Three-way split built from two DLC shuffles that share the same
+    training frames:
+
+        shuffle 1: train / val   (val drives snapshot selection during training)
+        shuffle 2: train / test  (test is never seen during training)
+
     test:  video stem(s) and/or folder_id(s) held out entirely (required).
+           A video stem selects every frame set extracted from that video.
     val:   same kind of selector; if None, val_fraction of the training
            rows is sampled at random (seeded) instead.
     train: selector(s); default = every frame set not in test/val.
+
+    Train shuffle 1 with train_network(), then call evaluate_on_test().
+    The split is recorded in <project>/splits.yaml.
     """
     project_config = Path(project_config).resolve()
     all_ids = {c["folder_id"] for c in list_labeled_data(project_config)}
@@ -637,14 +709,31 @@ def create_train_val_test_dataset(
             print(f"⚠️  {fid} has no labeled rows — it contributes nothing.")
 
     train_rows, test_rows = flat(train_ids), flat(test_ids)
+    if not train_rows:
+        raise ValueError("No labeled training rows found for the train frame sets.")
+    if not test_rows:
+        raise ValueError("No labeled rows found for the test frame sets — label them first.")
     if val_ids:
         val_rows = flat(val_ids)
+        if not val_rows:
+            raise ValueError("No labeled rows found for the val frame sets.")
     else:
         rng = random.Random(seed)
         pool = train_rows[:]
         rng.shuffle(pool)
         n_val = max(1, round(len(pool) * val_fraction))
         val_rows, train_rows = sorted(pool[:n_val]), sorted(pool[n_val:])
+
+    # DLC looks each split's train fraction up in config["TrainingFraction"],
+    # so both shuffles' fractions must be listed there.
+    frac_val = round(len(train_rows) / (len(train_rows) + len(val_rows)), 2)
+    frac_test = round(len(train_rows) / (len(train_rows) + len(test_rows)), 2)
+    fracs = [frac_val] if frac_val == frac_test else [frac_val, frac_test]
+    test_set_index = fracs.index(frac_test)
+
+    cfg = auxiliaryfunctions.read_config(str(project_config))
+    cfg["TrainingFraction"] = fracs
+    auxiliaryfunctions.write_config(str(project_config), cfg)
 
     # record the split so evaluation/reporting can reproduce it
     project_dir = project_config.parent
@@ -655,13 +744,50 @@ def create_train_val_test_dataset(
             "test_folders": sorted(test_ids),
             "n_rows": {"train": len(train_rows), "val": len(val_rows), "test": len(test_rows)},
             "shuffles": {"val": 1, "test": 2},
+            "training_fractions": fracs,
+            "trainingsetindex": {"val": 0, "test": test_set_index},
         }, f, sort_keys=False)
 
     print(f"Split: train={len(train_rows)}  val={len(val_rows)}  test={len(test_rows)} frames "
           f"(test = {sorted(test_ids)})")
 
-    return deeplabcut.create_training_dataset(
+    kwargs.setdefault("userfeedback", False)
+    result = deeplabcut.create_training_dataset(
         str(project_config), Shuffles=[1, 2],
         trainIndices=[train_rows, train_rows], testIndices=[val_rows, test_rows],
         net_type=net_type, engine=Engine.PYTORCH, **kwargs,
-    )    
+    )
+
+    if verify:
+        _verify_split(project_config, 1, train_rows, val_rows, train_ids, test_ids)
+        _verify_split(project_config, 2, train_rows, test_rows, train_ids, test_ids)
+    return result
+
+
+def evaluate_on_test(project_config, src_shuffle=1, test_shuffle=2, **kwargs):
+    """Copy the trained snapshots from src_shuffle into test_shuffle and
+    evaluate there, so the reported "test" metrics come from the held-out
+    split created by create_train_val_test_dataset(). Train src_shuffle
+    first.
+
+    Note: which snapshot gets evaluated is decided by `snapshotindex` in the
+    project's config.yaml (default -1 = last). To evaluate the snapshot
+    chosen by validation, set it accordingly / pass snapshots_to_evaluate.
+    """
+    project_config = Path(project_config).resolve()
+    cfg = auxiliaryfunctions.read_config(str(project_config))
+    root = Path(cfg["project_path"]) / "dlc-models-pytorch"
+    src = next(root.glob(f"iteration-*/*shuffle{src_shuffle}/train"))
+    dst = next(root.glob(f"iteration-*/*shuffle{test_shuffle}/train"))
+    for snap in src.glob("snapshot*.pt"):
+        shutil.copy2(snap, dst / snap.name)
+
+    splits_path = project_config.parent / "splits.yaml"
+    if not splits_path.exists():
+        raise FileNotFoundError(
+            f"{splits_path} not found — run create_train_val_test_dataset() first."
+        )
+    with open(splits_path) as f:
+        split = yaml.safe_load(f)
+    kwargs.setdefault("trainingsetindex", split["trainingsetindex"]["test"])
+    return evaluate_network(project_config, shuffle=test_shuffle, **kwargs)
