@@ -102,6 +102,13 @@ from .report import (
     render_html,
 )
 
+from .gui_folder_selection import (
+    select_folder,
+    select_file,
+    select_files,
+    select_save_path
+)
+
 __all__ = [
     "DataProject",
     "NetworkProject",
@@ -136,4 +143,8 @@ __all__ = [
     "generate_report",
     "build_report",
     "render_html",
+    "select_folder",
+    "select_file",
+    "select_files",
+    "select_save_path"
 ]
