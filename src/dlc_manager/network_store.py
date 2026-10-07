@@ -197,48 +197,50 @@ def create_project(store_path, name=None, scorer="Egor", engine="pytorch", **ove
 # Copying labeled data in
 # ────────────────────────────────────────────────────────────────────────
 
-def _relocate_annotation_paths(dest_dir, old_folder_name, new_folder_name, scorer):
-    """napari-deeplabcut bakes each labeled image's path into
-    CollectedData_<scorer>.h5's row index as
-    ("labeled-data", <folder name at labeling time>, <filename>). Since we
-    copy the frames into a differently-named folder here (folder_id instead
-    of bare video_stem, to avoid collisions), that embedded folder name has
-    to be updated to match — otherwise DLC looks for images under the old
-    name and fails with a FileNotFoundError at create_training_dataset time.
-    """
-    h5_path = dest_dir / f"CollectedData_{scorer}.h5"
-    if not h5_path.exists():
-        # Nothing labeled yet for this frame set — nothing to fix.
-        return
+def _relocate_annotation_paths(dest_dir, old_folder_name, new_folder_name, src_scorer, dst_scorer):
+    """Fix the baked-in folder name in the row index AND normalise the scorer
+    (file name + column level 0) to the network project's scorer, so DLC
+    finds and merges every frame set regardless of who labeled it."""
+    src_h5 = dest_dir / f"CollectedData_{src_scorer}.h5"
+    if not src_h5.exists():
+        found = sorted(dest_dir.glob("CollectedData_*.h5"))
+        if len(found) > 1:
+            raise RuntimeError(f"Multiple CollectedData_*.h5 in {dest_dir}: {[p.name for p in found]}")
+        if not found:
+            return  # nothing labeled yet
+        src_h5 = found[0]
 
-    with pd.HDFStore(h5_path, mode="r") as store:
+    with pd.HDFStore(src_h5, mode="r") as store:
         keys = store.keys()
     if len(keys) != 1:
-        raise RuntimeError(f"Expected exactly one table in {h5_path}, found {keys}")
+        raise RuntimeError(f"Expected exactly one table in {src_h5}, found {keys}")
     key = keys[0]
 
-    df = pd.read_hdf(h5_path, key=key)
+    df = pd.read_hdf(src_h5, key=key)
     if not isinstance(df.index, pd.MultiIndex) or df.index.nlevels < 3:
-        raise RuntimeError(f"Unexpected annotation index structure in {h5_path}: {df.index}")
+        raise RuntimeError(f"Unexpected annotation index structure in {src_h5}: {df.index}")
 
-    # Standard 3-level index: (top, video_folder, filename) — rename only
-    # the middle level, wherever it matches the folder's old name.
     df.index = pd.MultiIndex.from_tuples(
         [
             (t[0], new_folder_name if t[-2] == old_folder_name else t[-2], t[-1])
-            if len(t) == 3
-            else t
+            if len(t) == 3 else t
             for t in df.index
         ],
         names=df.index.names,
     )
-    df.to_hdf(h5_path, key=key, mode="w")
+    # scorer = column level 0
+    df.columns = pd.MultiIndex.from_tuples(
+        [(dst_scorer,) + tuple(c[1:]) for c in df.columns], names=df.columns.names
+    )
 
-    # The .csv sidecar (if any) is a human-readable export DLC doesn't read
-    # for training — drop it rather than leave it silently stale.
-    csv_path = dest_dir / f"CollectedData_{scorer}.csv"
-    if csv_path.exists():
-        csv_path.unlink()
+    dst_h5 = dest_dir / f"CollectedData_{dst_scorer}.h5"
+    df.to_hdf(dst_h5, key=key, mode="w")
+    if src_h5 != dst_h5:
+        src_h5.unlink()
+
+    # stale csv sidecars (old or new name) — DLC doesn't read them for training
+    for csv in dest_dir.glob("CollectedData_*.csv"):
+        csv.unlink()
 
 
 def add_labeled_data(project_config, source_folder, overwrite=False):
@@ -313,13 +315,19 @@ def add_labeled_data(project_config, source_folder, overwrite=False):
         shutil.rmtree(dest)
 
     shutil.copytree(frames_src, dest)
-    _relocate_annotation_paths(dest, old_folder_name=video_stem, new_folder_name=folder_id, scorer=proj_cfg["scorer"])
+    _relocate_annotation_paths(
+        dest, old_folder_name=video_stem, new_folder_name=folder_id,
+        src_scorer=source_cfg["scorer"], dst_scorer=proj_cfg["scorer"],
+    )
 
     sources = _load_sources(project_dir)
-    sources.setdefault("copied", []).append({
+    # overwrite=True re-adds: drop the old entry so list_labeled_data() has no duplicates
+    sources["copied"] = [c for c in sources.get("copied", []) if c["folder_id"] != folder_id]
+    sources["copied"].append({
         "folder_id": folder_id,
         "video_stem": video_stem,
         "source_folder": str(source_folder),
+        "source_scorer": source_cfg["scorer"],   # keep labeler provenance
         "frame_count": sum(1 for p in dest.iterdir() if p.suffix == ".png"),
         "copied_at": datetime.now().isoformat(timespec="seconds"),
     })
