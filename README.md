@@ -4,18 +4,20 @@
 
 **1. Install DeepLabCut** (GPU/platform-specific, do this first):
 ```
-pip install 'deeplabcut[gui]'   # local machine — training & inference & labeling
+pip install 'deeplabcut[gui]' 'napari>=0.6.6,<0.9'   # local machine — training & inference & labeling
 ```
 OR
 ```
 pip install deeplabcut          # Colab / headless — training & inference only
 ```
+(The `napari` cap is needed for labeling: `napari-deeplabcut` sets no upper bound on napari, and napari 0.9.x breaks it — napari opens empty with `ImportError: cannot import name 'SYMBOL_TRANSLATION_INVERTED'`. If you already hit this, run `pip install "napari>=0.6.6,<0.9"`, then `npe2 cache --clear`, and restart the Jupyter kernel.)
 
 **2. Install dlc_manager:**
 ```
-pip install --pre git+https://github.com/GreenCurve/DLC-data-manager.git
+pip install --pre "dlc_manager[gui] @ git+https://github.com/GreenCurve/DLC-data-manager.git"   # local machine (labeling)
+pip install --pre git+https://github.com/GreenCurve/DLC-data-manager.git                         # Colab / headless
 ```
-(`--pre` is required — pins a pydantic pre-release.)
+(`--pre` is required — pins a pydantic pre-release. The `[gui]` extra pins napari to a version the labeling plugin works with, so a later install or upgrade can't pull in a broken one.)
 
 **3. (Optional) W&B logging:**
 ```
@@ -29,16 +31,16 @@ In Colab, use a Secrets-panel API key instead — see Colab notes below.
 
 **1. Install DeepLabCut** (same as above):
 ```
-pip install 'deeplabcut[gui]'
+pip install 'deeplabcut[gui]' 'napari>=0.6.6,<0.9'
 ```
 
 **2. Clone the repo and install editable, with dev deps:**
 ```
 git clone https://github.com/GreenCurve/DLC-data-manager.git
 cd DLC-data-manager
-pip install --pre -e ".[dev]"
+pip install --pre -e ".[dev,gui]"
 ```
-(`-e` so edits under `src/dlc_manager` take effect immediately without reinstalling; `--pre` for the pydantic pin as above; `[dev]` pulls in pytest.)
+(`-e` so edits under `src/dlc_manager` take effect immediately without reinstalling; `--pre` for the pydantic pin as above; `[dev]` pulls in pytest; `[gui]` pins napari for labeling.)
 
 **3. Run the tests**, which call real `deeplabcut.extract_frames()` against actual video:
 ```
@@ -59,7 +61,7 @@ Because production installs the package straight from git (`pip install --pre gi
 pip install --pre --force-reinstall --no-deps git+https://github.com/GreenCurve/DLC-data-manager.git
 ```
 - `--force-reinstall` skips pip's "is this version already satisfied?" check and reinstalls regardless.
-- `--no-deps` avoids re-resolving/reinstalling `pyyaml`/`pandas`/`pydantic`/`wandb` unnecessarily — drop it if a dependency version has also changed.
+- `--no-deps` avoids re-resolving/reinstalling `pyyaml`/`pandas`/`pydantic`/`wandb` unnecessarily — drop it if a dependency version has also changed (including the napari pin in the `[gui]` extra: with `--no-deps`, it is not enforced).
 
 **Verify what actually got installed:**
 ```
@@ -74,8 +76,6 @@ pip install --pre git+https://github.com/GreenCurve/DLC-data-manager.git@<tag-or
 This is worth doing once a change is confirmed working in dev: tag the commit (`git tag v0.2.0 && git push --tags`), bump `version` in `pyproject.toml` to match, and point prod installs at that tag. Then a plain `pip install --pre --upgrade git+...@v0.2.0` behaves predictably, and anyone can tell from `pip freeze` exactly which release prod is running — rather than everyone being on a floating, unlabeled `main`.
 
 ---
-
-
 
 
 ## Examples
